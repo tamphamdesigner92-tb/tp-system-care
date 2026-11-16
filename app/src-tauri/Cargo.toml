@@ -1,0 +1,19 @@
+[package]
+name = "tp-system-care"
+description = "TP System Care"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tp_system_care_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tp-core = { path = "../../crates/tp-core" }
