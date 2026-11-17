@@ -52,6 +52,11 @@ pub enum Known {
     RoamingAppData,
     ProgramData,
     Windows,
+    Profile,
+    ProgramFiles,
+    ProgramFilesX86,
+    /// `%LOCALAPPDATA%\Programs`, nơi cài ứng dụng cho riêng một người dùng.
+    UserProgramFiles,
 }
 
 #[cfg(windows)]
@@ -71,6 +76,10 @@ pub fn known_folder(which: Known) -> Option<PathBuf> {
         Known::RoamingAppData => &FOLDERID_RoamingAppData,
         Known::ProgramData => &FOLDERID_ProgramData,
         Known::Windows => &FOLDERID_Windows,
+        Known::Profile => &FOLDERID_Profile,
+        Known::ProgramFiles => &FOLDERID_ProgramFiles,
+        Known::ProgramFilesX86 => &FOLDERID_ProgramFilesX86,
+        Known::UserProgramFiles => &FOLDERID_UserProgramFiles,
     };
     unsafe {
         let raw = SHGetKnownFolderPath(id, KNOWN_FOLDER_FLAG(0), None).ok()?;
@@ -301,6 +310,92 @@ pub fn run_hidden(
         let stderr = String::from_utf8_lossy(&err.join().unwrap_or_default()).trim().to_string();
         Err(if stderr.is_empty() { stdout.trim().to_string() } else { stderr })
     }
+}
+
+/// Chuyển một tệp hoặc thư mục vào Thùng rác. Nếu nó quá lớn để vào Thùng rác,
+/// Windows hỏi người dùng thay vì lặng lẽ xóa hẳn (`FOF_WANTNUKEWARNING`).
+#[cfg(windows)]
+pub fn recycle(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+
+    if !path.is_absolute() {
+        return Err("đường dẫn không hợp lệ".into());
+    }
+    // Danh sách đường dẫn kết thúc bằng hai ký tự rỗng.
+    let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+    from.extend([0, 0]);
+    let flags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI | FOF_WANTNUKEWARNING;
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(from.as_ptr()),
+        fFlags: flags.0 as u16,
+        ..Default::default()
+    };
+    let code = unsafe { SHFileOperationW(&mut op) };
+    if code != 0 {
+        Err(format!("0x{code:x}"))
+    } else if op.fAnyOperationsAborted.as_bool() {
+        Err("aborted".into())
+    } else if path.exists() {
+        Err("in_use".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn recycle(_path: &Path) -> Result<(), String> {
+    Err("chỉ hỗ trợ Windows".into())
+}
+
+/// Mở Explorer và chọn sẵn tệp hoặc thư mục.
+#[cfg(windows)]
+pub fn reveal(path: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+pub fn reveal(_path: &Path) -> Result<(), String> {
+    Err("chỉ hỗ trợ Windows".into())
+}
+
+/// Gốc các ổ cứng cố định đang gắn vào máy, ví dụ `C:\`.
+#[cfg(windows)]
+pub fn fixed_drives() -> Vec<PathBuf> {
+    use windows::Win32::Storage::FileSystem::GetLogicalDrives;
+    let mask = unsafe { GetLogicalDrives() };
+    (0..26u8)
+        .filter(|i| mask & (1 << i) != 0)
+        .map(|i| PathBuf::from(format!("{}:\\", (b'A' + i) as char)))
+        .filter(|root| on_fixed_drive(root))
+        .collect()
+}
+
+#[cfg(not(windows))]
+pub fn fixed_drives() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Tổng dung lượng các tệp trong một thư mục (không đi theo symlink).
+pub fn dir_size(dir: &Path) -> u64 {
+    walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// Giây tính từ mốc Unix.

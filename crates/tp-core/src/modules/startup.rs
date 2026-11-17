@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::engine::{Action, Finding, Module, ModuleId, ScanContext};
 use crate::modules::shortcut::is_missing;
 use crate::reg::{self, RawValue};
@@ -20,7 +22,7 @@ const RUN_WOW64: &str = "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersi
 pub const APPROVED: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved";
 
 /// Vị trí trạng thái bật/tắt của một mục khởi động.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StartupEntry {
     /// `true`: HKEY_LOCAL_MACHINE (cần quyền quản trị); `false`: HKEY_CURRENT_USER.
     pub machine: bool,
@@ -63,27 +65,98 @@ pub fn parse_command(command: &str) -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-fn finding(entry: StartupEntry, command: String, target: Option<PathBuf>) -> Option<Finding> {
-    if let (Some(target), Some(windows)) = (&target, winutil::known_folder(Known::Windows)) {
-        // Thành phần của Windows (ví dụ SecurityHealthSystray): không liệt kê.
-        if target.starts_with(&windows) {
-            return None;
+/// Một mục khởi động, bật hoặc đang tắt; dùng cho trang quản lý khởi động.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupItem {
+    /// Mã ổn định giữa các lần liệt kê: `<vị trí>|<tên>`.
+    pub id: String,
+    pub name: String,
+    /// Dòng lệnh, hoặc đường dẫn tệp trong thư mục Startup.
+    pub command: String,
+    /// `hkcuRun`, `hklmRun`, `hklmRun32`, `userFolder` hoặc `commonFolder`.
+    pub location: &'static str,
+    pub enabled: bool,
+    /// Trỏ tới tệp chắc chắn không còn.
+    pub broken: bool,
+    pub needs_admin: bool,
+    #[serde(skip)]
+    pub entry: StartupEntry,
+}
+
+/// Thành phần của Windows (ví dụ SecurityHealthSystray): không liệt kê.
+fn is_windows_component(target: Option<&Path>) -> bool {
+    match (target, winutil::known_folder(Known::Windows)) {
+        (Some(target), Some(windows)) => target.starts_with(windows),
+        _ => false,
+    }
+}
+
+fn item(location: &'static str, entry: StartupEntry, command: String, target: Option<PathBuf>) -> Option<StartupItem> {
+    if is_windows_component(target.as_deref()) {
+        return None;
+    }
+    Some(StartupItem {
+        id: format!("{location}|{}", entry.name),
+        name: entry.name.clone(),
+        command,
+        location,
+        enabled: !is_disabled(&entry),
+        broken: target.as_deref().is_some_and(is_missing),
+        needs_admin: entry.machine,
+        entry,
+    })
+}
+
+/// Mọi mục khởi động trong khóa Run và thư mục Startup, cả mục đang tắt.
+pub fn list() -> Vec<StartupItem> {
+    let mut items = Vec::new();
+    let registry = [
+        (false, RUN, "Run", "hkcuRun"),
+        (true, RUN, "Run", "hklmRun"),
+        (true, RUN_WOW64, "Run32", "hklmRun32"),
+    ];
+    for (machine, run_key, approved, location) in registry {
+        for (name, command) in run_values(machine, run_key) {
+            let entry = StartupEntry {
+                machine,
+                approved,
+                name,
+            };
+            let target = parse_command(&command);
+            items.extend(item(location, entry, command, target));
         }
     }
-    let broken = target.as_deref().is_some_and(is_missing);
-    Some(Finding {
-        id: String::new(),
-        module: ModuleId::Startup,
-        kind: if broken { "startup.broken" } else { "startup.entry" },
-        name: Some(entry.name.clone()),
-        detail: Some(command),
-        count: 1,
-        bytes: 0,
-        recommended: broken,
-        undoable: true,
-        needs_admin: entry.machine,
-        action: Action::DisableStartup(entry),
-    })
+
+    let folders = [(false, Known::Startup, "userFolder"), (true, Known::CommonStartup, "commonFolder")];
+    for (machine, folder, location) in folders {
+        let Some(dir) = winutil::known_folder(folder) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for file in entries.filter_map(Result::ok) {
+            let path = file.path();
+            let name = file.file_name().to_string_lossy().to_string();
+            if !path.is_file() || name.eq_ignore_ascii_case("desktop.ini") {
+                continue;
+            }
+            let entry = StartupEntry {
+                machine,
+                approved: "StartupFolder",
+                name,
+            };
+            let is_lnk = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
+            let target = if is_lnk {
+                winutil::shortcut_target(&path)
+            } else {
+                Some(path.clone())
+            };
+            items.extend(item(location, entry, path.to_string_lossy().to_string(), target));
+        }
+    }
+    items
 }
 
 impl Module for Startup {
@@ -92,64 +165,24 @@ impl Module for Startup {
     }
 
     fn scan(&self, ctx: &ScanContext) -> Vec<Finding> {
-        let mut findings = Vec::new();
-
-        let registry = [(false, RUN, "Run"), (true, RUN, "Run"), (true, RUN_WOW64, "Run32")];
-        for (machine, run_key, approved) in registry {
-            for (name, command) in run_values(machine, run_key) {
-                if ctx.cancelled() {
-                    return findings;
-                }
-                ctx.report(Path::new(&command));
-                let entry = StartupEntry {
-                    machine,
-                    approved,
-                    name,
-                };
-                if is_disabled(&entry) {
-                    continue;
-                }
-                let target = parse_command(&command);
-                findings.extend(finding(entry, command, target));
-            }
-        }
-
-        let folders = [(false, Known::Startup), (true, Known::CommonStartup)];
-        for (machine, folder) in folders {
-            let Some(dir) = winutil::known_folder(folder) else {
-                continue;
-            };
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for file in entries.filter_map(Result::ok) {
-                if ctx.cancelled() {
-                    return findings;
-                }
-                let path = file.path();
-                let name = file.file_name().to_string_lossy().to_string();
-                if !path.is_file() || name.eq_ignore_ascii_case("desktop.ini") {
-                    continue;
-                }
-                ctx.report(&path);
-                let entry = StartupEntry {
-                    machine,
-                    approved: "StartupFolder",
-                    name,
-                };
-                if is_disabled(&entry) {
-                    continue;
-                }
-                let is_lnk = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
-                let target = if is_lnk {
-                    winutil::shortcut_target(&path)
-                } else {
-                    Some(path.clone())
-                };
-                findings.extend(finding(entry, path.to_string_lossy().to_string(), target));
-            }
-        }
-        findings
+        ctx.report(Path::new(RUN));
+        list()
+            .into_iter()
+            .filter(|item| item.enabled)
+            .map(|item| Finding {
+                id: String::new(),
+                module: ModuleId::Startup,
+                kind: if item.broken { "startup.broken" } else { "startup.entry" },
+                name: Some(item.name),
+                detail: Some(item.command),
+                count: 1,
+                bytes: 0,
+                recommended: item.broken,
+                undoable: true,
+                needs_admin: item.needs_admin,
+                action: Action::DisableStartup(item.entry),
+            })
+            .collect()
     }
 }
 
@@ -188,11 +221,17 @@ fn write_state(machine: bool, subkey: &str, name: &str, bytes: &[u8]) -> Result<
     reg::write(machine, subkey, name, &value)
 }
 
-
 fn is_disabled(entry: &StartupEntry) -> bool {
     read_state(entry.machine, &approved_key(entry.approved), &entry.name)
         .and_then(|bytes| bytes.first().copied())
         .is_some_and(|first| first & 1 == 1)
+}
+
+/// Bật hoặc tắt một mục khởi động từ trang quản lý khởi động. Bật lại ghi giá trị
+/// giống Task Manager (byte đầu bằng 2).
+pub fn set_enabled(entry: &StartupEntry, enabled: bool) -> Result<(), String> {
+    let value = if enabled { vec![2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } else { disabled_value() };
+    write_state(entry.machine, &approved_key(entry.approved), &entry.name, &value)
 }
 
 /// Tắt một mục khởi động; trả về bước hoàn tác mang trạng thái cũ.

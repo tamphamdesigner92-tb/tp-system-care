@@ -10,6 +10,8 @@ pub struct Junk;
 struct Group {
     kind: &'static str,
     needs_admin: bool,
+    /// Chọn sẵn khi hiện kết quả.
+    recommended: bool,
     sources: Vec<Source>,
 }
 
@@ -23,12 +25,14 @@ fn groups() -> Vec<Group> {
     groups.push(Group {
         kind: "junk.userTemp",
         needs_admin: false,
+        recommended: true,
         sources: vec![Source::dir(std::env::temp_dir()).older_than_hours(24)],
     });
     if let Some(windows) = &windows {
         groups.push(Group {
             kind: "junk.windowsTemp",
             needs_admin: true,
+            recommended: true,
             sources: vec![Source::dir(windows.join("Temp")).older_than_hours(24)],
         });
     }
@@ -45,6 +49,7 @@ fn groups() -> Vec<Group> {
     groups.push(Group {
         kind: "junk.browserCache",
         needs_admin: false,
+        recommended: true,
         sources: cache,
     });
 
@@ -52,6 +57,7 @@ fn groups() -> Vec<Group> {
         groups.push(Group {
             kind: "junk.thumbnails",
             needs_admin: false,
+            recommended: true,
             sources: vec![Source::dir(local.join("Microsoft\\Windows\\Explorer"))
                 .flat(&["thumbcache_", "iconcache_"])],
         });
@@ -66,6 +72,7 @@ fn groups() -> Vec<Group> {
     groups.push(Group {
         kind: "junk.errorReports",
         needs_admin: false,
+        recommended: true,
         sources: reports,
     });
 
@@ -81,6 +88,7 @@ fn groups() -> Vec<Group> {
     groups.push(Group {
         kind: "junk.crashDumps",
         needs_admin: windows.is_some(),
+        recommended: true,
         sources: dumps,
     });
 
@@ -88,12 +96,14 @@ fn groups() -> Vec<Group> {
     groups.push(Group {
         kind: "junk.appCache",
         needs_admin: false,
+        recommended: true,
         sources: electron_caches().into_iter().map(Source::dir).collect(),
     });
     if let Some(local) = &local {
         groups.push(Group {
             kind: "junk.systemCache",
             needs_admin: false,
+            recommended: true,
             sources: vec![
                 Source::dir(local.join("D3DSCache")),
                 Source::dir(local.join("Microsoft\\Windows\\INetCache")),
@@ -105,13 +115,23 @@ fn groups() -> Vec<Group> {
         groups.push(Group {
             kind: "junk.logs",
             needs_admin: true,
+            recommended: true,
             sources: vec![Source::dir(windows.join("Logs"))
                 .older_than_hours(7 * 24)
                 .only_extensions(&["log", "etl", "cab"])],
         });
+        // Bản cập nhật Windows đã tải về. Xóa khi Windows Update đang cài sẽ làm
+        // lần cài đó phải tải lại, nên không chọn sẵn.
+        groups.push(Group {
+            kind: "junk.updateDownloads",
+            needs_admin: true,
+            recommended: false,
+            sources: vec![Source::dir(windows.join("SoftwareDistribution\\Download")).older_than_hours(24)],
+        });
         groups.push(Group {
             kind: "junk.deliveryCache",
             needs_admin: true,
+            recommended: true,
             sources: vec![Source::dir(windows.join(
                 "ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache",
             ))],
@@ -147,7 +167,7 @@ impl Module for Junk {
                 detail: set.roots.first().map(|p| p.to_string_lossy().to_string()),
                 count: set.files.len() as u64,
                 bytes: set.bytes,
-                recommended: true,
+                recommended: group.recommended,
                 undoable: false,
                 needs_admin: group.needs_admin,
                 action: Action::DeleteFiles {

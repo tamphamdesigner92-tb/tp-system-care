@@ -2,7 +2,7 @@
 
 Ứng dụng chăm sóc và tối ưu Windows, phong cách giao diện tương tự Advanced SystemCare (nền tối, thanh bên trái, nút Quét tròn lớn, công tắc Chế độ AI / Thủ công) nhưng dùng tên, logo, icon và nội dung riêng.
 
-_Cập nhật lần cuối: 16/11/2026_
+_Cập nhật lần cuối: 17/11/2026_
 
 ## Tóm tắt tiến độ
 
@@ -11,7 +11,7 @@ _Cập nhật lần cuối: 16/11/2026_
 | 1 | Khung ứng dụng, giao diện chính, điều hướng, đa ngôn ngữ, quyền admin | 1–2 tuần | ✅ Hoàn thành (16/11/2026) |
 | 2 | Engine quét, Rescue Center, 4 module an toàn | 2–3 tuần | ✅ Hoàn thành (16/11/2026), còn việc thử tay |
 | 3 | Registry, tối ưu hệ thống/Internet/ổ đĩa, Chế độ AI, dọn sâu, điểm sức khỏe | 4–5 tuần | ✅ Hoàn thành (16/11/2026), còn việc thử tay |
-| 4 | Tăng tốc, Dọn dẹp tùy chỉnh, tinh chỉnh trình duyệt, Gỡ ứng dụng sạch | 5–7 tuần | ⏳ Kế tiếp |
+| 4 | Tăng tốc, Dọn dẹp tùy chỉnh, tinh chỉnh trình duyệt, Gỡ ứng dụng sạch | 5–7 tuần | Đang làm (17/11/2026) |
 | 5 | Bảo vệ (thời gian thực, Safe Folder, email, Anti-Tracking), Khóa thư mục, Cập nhật phần mềm và driver, Hộp công cụ | 10–14 tuần | Chưa bắt đầu |
 | 6 | Service nền, Auto Care, tự giải phóng RAM, CPU Saver, widget, bộ cài, tự cập nhật, kiểm thử | 3–5 tuần | Chưa bắt đầu |
 
@@ -30,7 +30,7 @@ Tổng ước lượng: 7–10 tháng cho một người làm toàn thời gian,
 
 | Thành phần | Vai trò | Thư viện chính | Trạng thái |
 |---|---|---|---|
-| `crates/tp-core` | Engine quét/sửa, Rescue Center | `windows`, `winreg`, `walkdir` (sau này thêm `wmi`, `sysinfo`) | Có engine, Rescue Center, 10 module, luật Chế độ AI và điểm sức khỏe |
+| `crates/tp-core` | Engine quét/sửa, Rescue Center, công cụ hệ thống | `windows`, `winreg`, `walkdir` (sau này thêm `wmi`, `sysinfo`) | Có engine, Rescue Center, 10 module, luật Chế độ AI, điểm sức khỏe; công cụ Tăng tốc, Gỡ sạch và Tìm tệp lớn |
 | `app/src-tauri` | Ứng dụng Tauri: cửa sổ, lệnh gọi từ giao diện, tray | `tauri` 2 | Đã tạo |
 | `app/src` | Giao diện Svelte | `svelte` 5, `@tauri-apps/api` | Đã tạo |
 | `crates/tp-service` | Windows Service quyền admin, lịch tự động, giao tiếp qua named pipe | `windows-service` | Chưa tạo (giai đoạn 6) |
@@ -229,16 +229,39 @@ Còn tồn đọng:
 - [ ] Tra cứu Windows Update chậm (khoảng 25 giây) và cần mạng; quá 120 giây thì hạng mục bị bỏ qua mà chưa báo lý do lên giao diện.
 - [ ] Một số thay đổi bảo mật (UAC, SMBv1) chỉ có hiệu lực sau khi khởi động lại; giao diện mới ghi chú chung, chưa nhắc khởi động lại.
 
-### Giai đoạn 4 — Tăng tốc, Dọn dẹp tùy chỉnh
+### Giai đoạn 4 — Tăng tốc, Dọn dẹp tùy chỉnh — Đang làm
 
-- [ ] Turbo Boost, quản lý khởi động, giải phóng RAM, tối ưu sâu.
-- [ ] Gỡ sạch: liệt kê ứng dụng (registry, MSI, Store), thông tin và bộ lọc.
-- [ ] Gỡ sạch: gỡ chuẩn, quét và xem trước tàn dư, xóa có sao lưu.
-- [ ] Gỡ sạch: gỡ cưỡng bức, gỡ hàng loạt, gỡ ứng dụng Windows cài sẵn.
-- [ ] Gỡ sạch: tiện ích/toolbar trình duyệt, bản cập nhật Windows.
-- [ ] Gỡ sạch: Install Monitor và phát hiện phần mềm đi kèm.
-- [ ] Dọn theo ứng dụng/trình duyệt, tệp lớn, tệp trùng, Windows Update/WinSxS.
-- [ ] (Pro) Tinh chỉnh trình duyệt: cache, tiện ích nặng, DNS và thiết lập mạng.
+Đã làm:
+
+- [x] Module công cụ riêng (`crates/tp-core/src/tools/`) và lệnh Tauri; giao diện chỉ gửi mã của mục backend đã liệt kê.
+- [x] Tăng tốc: Turbo Boost đổi power plan sang Hiệu năng cao/Ultimate, lưu gói nguồn cũ trong `turbo.json` để trả lại khi tắt; giải phóng RAM bằng `EmptyWorkingSet`.
+- [x] Quản lý khởi động: liệt kê cả mục đang tắt, bật/tắt qua `StartupApproved` như Task Manager.
+- [x] Gỡ sạch: liệt kê ứng dụng Win32/MSI từ các nhánh Uninstall HKLM/HKCU, 32/64-bit; tìm theo tên/nhà phát hành, sắp theo tên/dung lượng/ngày cài.
+- [x] Gỡ chuẩn bằng trình gỡ gốc (`ShellExecuteExW`, MSI dùng `msiexec /x`); sau gỡ quét thư mục và registry khớp tên, tránh thư mục hệ thống/dùng chung, không chọn sẵn AppData và thư mục từ 500 MB.
+- [x] Xem trước rồi xóa: thư mục vào Thùng rác, registry xuất ra `.reg` trước khi xóa; Rescue Center có tên bản ghi công cụ và hoàn tác bằng `UndoOp::ImportRegFile`.
+- [x] Chốt an toàn: giao diện/backend chặn cả quét và xóa tàn dư khi khóa Uninstall vẫn còn; ví dụ chỉ-đọc không chọn sẵn bất kỳ tàn dư nào của ứng dụng còn cài. Dọn sạch danh sách/ô chọn cũ khi đổi ứng dụng hoặc quét lại.
+- [x] Bỏ chờ vô hạn: kiểm tra tiến trình mỗi 200 ms, dùng cờ hủy chung; nút Ngừng chờ hoặc rời trang sẽ nhả việc chờ, không tắt trình gỡ. Ẩn nút quay lại danh sách khi đang xử lý và không tự quét sau khi rời trang.
+- [x] Tìm tệp lớn: chọn thư mục người dùng/ổ cố định, ngưỡng 100/500/1024 MB, bỏ qua thư mục hệ thống, đánh dấu AppData, không chọn sẵn; mở Explorer và chuyển tệp vào Thùng rác.
+- [x] Dọn rác thêm bộ nhớ đệm tải Windows Update (`SoftwareDistribution\\Download`), không chọn sẵn.
+- [x] Giao diện Tăng tốc, Dọn dẹp tùy chỉnh (Tìm tệp lớn), Hộp công cụ (Gỡ cài đặt sạch và các mục chưa xây dựng); lối tắt từ Tăng tốc; backend giả cho các công cụ, thông báo Việt/Anh.
+
+Đã kiểm tra:
+
+- 38 unit test của `tp-core` đạt (giai đoạn 3: 26); gồm hồi quy không chọn sẵn tàn dư khi ứng dụng còn đăng ký dù trình gỡ đã mất, và cờ hủy trước khi mở trình gỡ.
+- `cargo build -p tp-system-care` đạt, không cảnh báo; `npm run check` 0 lỗi/0 cảnh báo; Việt/Anh có 234 khóa. `npm run build` đạt, còn cảnh báo import động của Tauri không tách thành chunk riêng.
+- Chạy công cụ chỉ-đọc trên máy phát triển: 119 ứng dụng, 19 mục khởi động (15 đang tắt); luật tránh thư mục dùng chung Adobe và không chọn sẵn thư mục lớn đã được đối chiếu. Quét tệp từ 500 MB trong hồ sơ người dùng mất 82,5 giây ở bản debug.
+- Giao diện với backend giả: Tăng tốc, Tìm tệp lớn và luồng gỡ/xóa tàn dư; thử Ngừng chờ, quét/xóa bị chặn khi còn cài, rời trang khi đang chờ, đổi ứng dụng không giữ dữ liệu cũ và thông báo Việt/Anh. Không lỗi console ứng dụng.
+
+Còn tồn đọng:
+
+- [ ] Tối ưu sâu; ứng dụng Store/UWP, lần dùng gần nhất và bộ lọc nâng cao.
+- [ ] Tàn dư service, tác vụ định kỳ, lối tắt và mục khởi động; tự tạo điểm khôi phục trước khi gỡ.
+- [ ] Gỡ cưỡng bức, gỡ hàng loạt, ứng dụng Windows cài sẵn; xử lý mục gỡ mồ côi (giao diện hiện chặn khi khóa Uninstall còn, kể cả khi trình gỡ đã mất).
+- [ ] Tiện ích/toolbar trình duyệt, bản cập nhật Windows, Install Monitor và phần mềm đi kèm.
+- [ ] Dọn theo ứng dụng/trình duyệt, tệp trùng và WinSxS; tinh chỉnh trình duyệt (cache, tiện ích nặng, DNS, thiết lập mạng).
+- [ ] Chưa thử thao tác thật qua cửa sổ Tauri: Turbo, giải phóng RAM, bật/tắt khởi động, gỡ ứng dụng, Ngừng chờ trình gỡ thật, xóa tàn dư/hoàn tác registry và Thùng rác. Mới kiểm tra bằng unit test, liệt kê chỉ-đọc và giao diện giả.
+- [ ] Backend giả chưa ghi lịch sử công cụ vào Rescue Center; ô chọn tàn dư/tệp lớn còn thiếu nhãn truy cập.
+- [ ] Chưa đo tốc độ quét tệp lớn ở bản release; chưa build lại bộ cài cho giai đoạn 4.
 
 ### Giai đoạn 5 — Bảo vệ, Cập nhật phần mềm, Hộp công cụ
 
@@ -274,7 +297,7 @@ Còn tồn đọng:
 - **Dọn registry và tối ưu sâu có thể làm hỏng Windows:** mọi thao tác phải sao lưu trước và hoàn tác được; luật ban đầu giữ ở mức thận trọng.
 - **Driver sai có thể gây màn hình xanh hoặc mất thiết bị:** chỉ lấy driver WHQL từ Windows Update, luôn sao lưu và tạo điểm khôi phục, không tự cài khi chạy theo lịch.
 - **Gỡ cưỡng bức và quét tàn dư có thể xóa nhầm tệp dùng chung:** luôn xem trước, mục không chắc chắn để người dùng tự chọn, tệp vào Thùng rác thay vì xóa hẳn.
-- **Tệp lịch sử của Rescue Center nằm trong thư mục người dùng:** bước hoàn tác đọc từ `history.json` rồi ghi vào registry, kể cả HKLM khi ứng dụng chạy quyền quản trị. Chương trình chạy quyền thường có thể sửa tệp này để mượn quyền. Cần chuyển sang thư mục chỉ quản trị viên ghi được khi có `tp-service` (giai đoạn 6).
+- **Tệp lịch sử của Rescue Center nằm trong thư mục người dùng:** bước hoàn tác đọc từ `history.json` rồi ghi vào registry, kể cả HKLM khi ứng dụng chạy quyền quản trị. Tàn dư registry còn được hoàn tác bằng `UndoOp::ImportRegFile` (`reg.exe import`), nên cả đường dẫn lẫn nội dung tệp `.reg` là dữ liệu nhạy cảm. Chương trình chạy quyền thường có thể sửa các tệp này để mượn quyền. Cần chuyển sang thư mục chỉ quản trị viên ghi được khi có `tp-service` (giai đoạn 6).
 - **Khóa thư mục có thể làm mất dữ liệu:** với Khóa mã hóa, mất cả mật khẩu lẫn mã khôi phục là không lấy lại được; phải bắt người dùng lưu mã khôi phục và nói rõ điều này. Mã hóa bị ngắt giữa chừng phải chạy tiếp được, không để tệp ở trạng thái dở.
 - **Khóa nhanh không phải mã hóa:** phải ghi rõ trên giao diện để người dùng không tưởng nó chống được người có quyền quản trị hoặc việc tháo ổ cứng.
 - **Antivirus báo nhầm:** cần chứng chỉ ký mã cho bản phát hành.
@@ -301,6 +324,10 @@ cargo test -p tp-core
 
 ```bash
 cargo run -p tp-core --example scan
+cargo run -p tp-core --example tools
+cargo run -p tp-core --example leftover_audit
 ```
+
+Hai ví dụ công cụ chỉ liệt kê và xem trước; khi ứng dụng vẫn còn cài, không tàn dư nào được chọn sẵn. Giao diện chặn cả quét lẫn xóa cho đến khi khóa Uninstall biến mất.
 
 Sản phẩm build: `target\release\tp-system-care.exe` và `target\release\bundle\nsis\TP System Care_0.1.0_x64-setup.exe`.

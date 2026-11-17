@@ -87,6 +87,8 @@ export interface RescueRecord {
   /** Giây tính từ mốc Unix. */
   time: number;
   modules: ModuleId[];
+  /** Thao tác của công cụ ngoài luồng quét, ví dụ `uninstall:7-Zip`. */
+  title?: string;
   done: number;
   failed: number;
   bytes: number;

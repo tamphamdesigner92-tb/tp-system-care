@@ -9,25 +9,27 @@ use tp_core::engine::{self, Finding, FixReport, ModuleId, ModuleResult, ScanEven
 use tp_core::rescue::{self, Record, Rescue, UndoReport};
 use tp_core::state::{self, Advice, Health, Store};
 
+mod tools;
+
 /// Khoảng cách tối thiểu giữa hai sự kiện "đang quét tệp X" gửi lên giao diện.
 const PATH_EVENT_INTERVAL: Duration = Duration::from_millis(80);
 
-struct AppState {
+pub(crate) struct AppState {
     /// Kết quả của lần quét gần nhất, tra theo mã mục.
     findings: Mutex<HashMap<String, Finding>>,
-    cancel: Arc<AtomicBool>,
+    pub(crate) cancel: Arc<AtomicBool>,
     /// Chỉ cho một lần quét hoặc sửa chạy tại một thời điểm.
-    busy: Arc<AtomicBool>,
-    rescue: Arc<Rescue>,
+    pub(crate) busy: Arc<AtomicBool>,
+    pub(crate) rescue: Arc<Rescue>,
     /// Trạng thái quét gần nhất, dùng cho Chế độ AI và điểm sức khỏe.
     store: Arc<Store>,
 }
 
 /// Giữ cờ `busy` và tự nhả khi xong, kể cả khi tác vụ bị lỗi.
-struct BusyGuard(Arc<AtomicBool>);
+pub(crate) struct BusyGuard(Arc<AtomicBool>);
 
 impl BusyGuard {
-    fn acquire(flag: &Arc<AtomicBool>) -> Result<Self, String> {
+    pub(crate) fn acquire(flag: &Arc<AtomicBool>) -> Result<Self, String> {
         if flag.swap(true, Ordering::SeqCst) {
             Err("busy".into())
         } else {
@@ -188,6 +190,7 @@ pub fn run() {
             rescue: Arc::new(Rescue::default_location()),
             store: Arc::new(Store::default_location()),
         })
+        .manage(tools::ToolState::default())
         .invoke_handler(tauri::generate_handler![
             is_elevated,
             scan,
@@ -197,7 +200,21 @@ pub fn run() {
             health,
             rescue_history,
             rescue_undo,
-            create_restore_point
+            create_restore_point,
+            tools::memory_status,
+            tools::release_ram,
+            tools::turbo_status,
+            tools::turbo_set,
+            tools::startup_list,
+            tools::startup_set,
+            tools::apps_list,
+            tools::app_uninstall,
+            tools::leftovers_scan,
+            tools::leftovers_remove,
+            tools::large_locations,
+            tools::large_scan,
+            tools::large_recycle,
+            tools::reveal
         ])
         .run(tauri::generate_context!())
         .expect("error while running TP System Care");

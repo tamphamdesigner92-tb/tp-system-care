@@ -10,6 +10,13 @@
 
   const errorText = (error: unknown) => tOr(`rescue.err.${error}`, String(error));
 
+  /** Bản ghi của công cụ có `title` dạng `uninstall:<tên ứng dụng>` hoặc `largeFiles`. */
+  function describe(record: RescueRecord): string {
+    if (record.title?.startsWith('uninstall:')) return t('rescue.uninstall', { name: record.title.slice(10) });
+    if (record.title === 'largeFiles') return t('rescue.largeFiles');
+    return record.modules.map((m) => t(`item.${m}` as Key)).join(', ');
+  }
+
   async function load() {
     if (!inTauri()) return;
     records = await rescueHistory();
@@ -65,9 +72,7 @@
         <li>
           <div class="info">
             <span class="time">{formatTime(record.time)}</span>
-            <span class="what">
-              {record.modules.map((m) => t(`item.${m}` as Key)).join(', ')}
-            </span>
+            <span class="what">{describe(record)}</span>
           </div>
           <span class="amount">
             {t('rescue.items', { n: formatCount(record.done) })}{record.bytes > 0 ? ` · ${formatBytes(record.bytes)}` : ''}

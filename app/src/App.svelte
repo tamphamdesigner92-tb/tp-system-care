@@ -4,14 +4,23 @@
   import { pages, type PageId } from './lib/pages';
   import { isElevated } from './lib/tauri';
   import Care from './pages/Care.svelte';
+  import Clean from './pages/Clean.svelte';
   import Placeholder from './pages/Placeholder.svelte';
   import Rescue from './pages/Rescue.svelte';
+  import Speed from './pages/Speed.svelte';
+  import Toolbox from './pages/Toolbox.svelte';
 
   /** Rescue Center mở từ thanh tiêu đề, không nằm trong thanh bên. */
   let view = $state<PageId | 'rescue'>('care');
   let elevated = $state<boolean | null>(null);
+  let toolboxTool = $state<'uninstaller' | null>(null);
 
   const page = $derived(pages.find((p) => p.id === view));
+
+  function select(id: PageId) {
+    if (id === 'toolbox' && view !== 'toolbox') toolboxTool = null;
+    view = id;
+  }
 
   isElevated()
     .then((value) => (elevated = value))
@@ -19,7 +28,7 @@
 </script>
 
 <div class="shell">
-  <Sidebar current={view === 'rescue' ? null : view} {elevated} onselect={(id) => (view = id)} />
+  <Sidebar current={view === 'rescue' ? null : view} {elevated} onselect={select} />
   <main>
     <TitleBar rescueOpen={view === 'rescue'} onrescue={() => (view = view === 'rescue' ? 'care' : 'rescue')} />
     <!-- Trang Chăm sóc luôn được giữ lại để lần quét đang chạy không mất khi chuyển trang. -->
@@ -28,6 +37,17 @@
     </div>
     {#if view === 'rescue'}
       <Rescue />
+    {:else if view === 'speed'}
+      <Speed
+        onuninstall={() => {
+          toolboxTool = 'uninstaller';
+          view = 'toolbox';
+        }}
+      />
+    {:else if view === 'clean'}
+      <Clean />
+    {:else if view === 'toolbox'}
+      <Toolbox bind:tool={toolboxTool} />
     {:else if page && view !== 'care'}
       {#key view}
         <Placeholder {page} />

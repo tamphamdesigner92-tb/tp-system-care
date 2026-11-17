@@ -13,9 +13,9 @@ export interface PageDef {
 
 export const pages: PageDef[] = [
   { id: 'care', icon: 'care', label: 'nav.care' },
-  { id: 'clean', icon: 'clean', label: 'nav.clean', desc: 'page.clean.desc' },
-  { id: 'speed', icon: 'speed', label: 'nav.speed', desc: 'page.speed.desc' },
+  { id: 'clean', icon: 'clean', label: 'nav.clean' },
+  { id: 'speed', icon: 'speed', label: 'nav.speed' },
   { id: 'protect', icon: 'protect', label: 'nav.protect', desc: 'page.protect.desc' },
   { id: 'update', icon: 'update', label: 'nav.update', desc: 'page.update.desc' },
-  { id: 'toolbox', icon: 'toolbox', label: 'nav.toolbox', desc: 'page.toolbox.desc' },
+  { id: 'toolbox', icon: 'toolbox', label: 'nav.toolbox' },
 ];

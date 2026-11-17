@@ -8,6 +8,7 @@ pub mod modules;
 pub mod reg;
 pub mod rescue;
 pub mod state;
+pub mod tools;
 mod winutil;
 
-pub use winutil::{is_elevated, unix_now};
+pub use winutil::{is_elevated, reveal, unix_now};

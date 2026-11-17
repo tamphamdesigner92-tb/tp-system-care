@@ -43,6 +43,8 @@ pub enum UndoOp {
         values: Vec<(String, RawValue)>,
     },
     SetToggle { toggle: Toggle, enable: bool },
+    /// Nhập lại một khóa registry đã xuất ra tệp `.reg` trước khi xóa cả cây.
+    ImportRegFile { file: PathBuf },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,6 +54,9 @@ pub struct Record {
     /// Giây tính từ mốc Unix.
     pub time: u64,
     pub modules: Vec<ModuleId>,
+    /// Tên thao tác của công cụ ngoài luồng quét (ví dụ "Gỡ: 7-Zip").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub done: u64,
     pub failed: u64,
     pub bytes: u64,
@@ -150,6 +155,7 @@ impl Rescue {
             id,
             time: winutil::unix_now(),
             modules,
+            title: None,
             done,
             failed,
             bytes,
@@ -157,6 +163,25 @@ impl Rescue {
             undo,
             undone: false,
         });
+        self.save(&records)
+    }
+
+    /// Ghi bản ghi cho thao tác của một công cụ (không thuộc hạng mục quét nào).
+    pub fn add_tool_record(
+        &self,
+        id: u64,
+        title: &str,
+        done: u64,
+        failed: u64,
+        bytes: u64,
+        undo: Vec<UndoOp>,
+    ) -> Result<(), String> {
+        self.add_record(id, Vec::new(), done, failed, bytes, undo)?;
+        let _guard = self.lock.lock().unwrap();
+        let mut records = self.load();
+        if let Some(record) = records.iter_mut().find(|r| r.id == id) {
+            record.title = Some(title.to_string());
+        }
         self.save(&records)
     }
 
@@ -254,6 +279,7 @@ fn undo_one(op: &UndoOp) -> Result<(), String> {
             Ok(())
         }
         UndoOp::SetToggle { toggle, enable } => disk::set_toggle(*toggle, *enable),
+        UndoOp::ImportRegFile { file } => import_registry_file(file),
     }
 }
 
@@ -295,6 +321,23 @@ pub fn export_registry_key(rescue: &Rescue, record_id: u64, key: &str, file_name
 
 #[cfg(not(windows))]
 pub fn export_registry_key(_: &Rescue, _: u64, _: &str, _: &str) -> Result<PathBuf, String> {
+    Err("chỉ hỗ trợ Windows".into())
+}
+
+/// Nhập một tệp `.reg` đã xuất bởi [`export_registry_key`].
+#[cfg(windows)]
+fn import_registry_file(file: &Path) -> Result<(), String> {
+    winutil::run_hidden(
+        "reg.exe",
+        &["import", &file.to_string_lossy()],
+        std::time::Duration::from_secs(30),
+        None,
+    )
+    .map(|_| ())
+}
+
+#[cfg(not(windows))]
+fn import_registry_file(_file: &Path) -> Result<(), String> {
     Err("chỉ hỗ trợ Windows".into())
 }
 
