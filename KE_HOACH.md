@@ -2,7 +2,7 @@
 
 Ứng dụng chăm sóc và tối ưu Windows, phong cách giao diện tương tự Advanced SystemCare (nền tối, thanh bên trái, nút Quét tròn lớn, công tắc Chế độ AI / Thủ công) nhưng dùng tên, logo, icon và nội dung riêng.
 
-_Cập nhật lần cuối: 17/11/2026_
+_Cập nhật lần cuối: 18/11/2026_
 
 ## Tóm tắt tiến độ
 
@@ -110,7 +110,7 @@ Là một công cụ đầy đủ trong "Hộp công cụ", có lối tắt từ
 | Gỡ ứng dụng Windows cài sẵn | `Remove-AppxPackage` cho ứng dụng Store và bloatware |
 | Gỡ tiện ích và toolbar trình duyệt | Chrome, Edge, Firefox: liệt kê và xóa tiện ích |
 | Gỡ bản cập nhật Windows | Liệt kê và gỡ bản cập nhật gây lỗi |
-| Theo dõi cài đặt (Install Monitor) | Chụp trạng thái tệp và registry trước/sau khi cài để lần gỡ sau sạch tuyệt đối |
+| Theo dõi cài đặt (Install Monitor) | Chụp trước/sau trong thư mục cài đã chọn và các nhánh registry giới hạn; lưu nhật ký để đối chiếu khi gỡ. Thay đổi đồng thời không chứng minh thuộc bộ cài, không bảo đảm sạch tuyệt đối |
 | Phát hiện phần mềm đi kèm | Cảnh báo ứng dụng được cài cùng lúc mà người dùng không chủ ý |
 | An toàn | Điểm khôi phục và sao lưu registry trước mỗi lần gỡ; tệp tàn dư vào Thùng rác, có tùy chọn hủy hẳn |
 
@@ -238,29 +238,44 @@ Còn tồn đọng:
 - [x] Quản lý khởi động: liệt kê cả mục đang tắt, bật/tắt qua `StartupApproved` như Task Manager.
 - [x] Gỡ sạch: liệt kê ứng dụng Win32/MSI từ các nhánh Uninstall HKLM/HKCU, 32/64-bit; tìm theo tên/nhà phát hành, sắp theo tên/dung lượng/ngày cài.
 - [x] Gỡ chuẩn bằng trình gỡ gốc (`ShellExecuteExW`, MSI dùng `msiexec /x`); sau gỡ quét thư mục và registry khớp tên, tránh thư mục hệ thống/dùng chung, không chọn sẵn AppData và thư mục từ 500 MB.
+- [x] Gỡ sạch đợt 2: chọn nhiều ứng dụng, chạy hàng đợi tuần tự, báo kết quả/lỗi/mục chưa chạy; dừng hàng đợi khi hủy, gặp lỗi hoặc ứng dụng vẫn còn cài. Quét tàn dư riêng từng ứng dụng, không tự xóa.
+- [x] Liệt kê và gỡ Store/Appx cùng các ứng dụng Windows cài sẵn có thể gỡ, chỉ cho tài khoản hiện tại. Lọc Desktop/Store/Có sẵn; gói thiết yếu, framework, resource, bundle và metadata không rõ được bảo vệ. Không gỡ provisioning hoặc gói của người dùng khác; dữ liệu `LocalAppData\\Packages` không chọn sẵn.
+- [x] Chế độ cưỡng bức tách riêng, phải xác nhận cảnh báo; có mục tiêu ngoài danh sách bằng tên/thư mục đã xác minh. Chỉ cho desktop, không tự chuyển chế độ khi gỡ chuẩn lỗi, không chọn sẵn bất kỳ tàn dư nào; chặn thư mục hệ thống/dùng chung và liên kết thư mục.
+- [x] Trước khi gỡ hoặc quét cưỡng bức phải thử tạo điểm khôi phục. Lỗi quyền quản trị/System Protection/tần suất được hiển thị; chỉ sau thất bại và xác nhận riêng mới cho tiếp tục. Phiên backend ràng buộc đúng mã ứng dụng/chế độ, gỡ chuẩn chỉ chạy một lần mỗi phiên.
+- [x] Quét thêm lối tắt, giá trị Run/StartupApproved, service và tác vụ theo lịch dựa trên đường dẫn executable thuộc ứng dụng, không dò theo tên service/task hoặc tham số lệnh. Sao lưu rồi kiểm tra lại mục tiêu trước khi xóa; các mục này không chọn sẵn.
+- [x] Service chỉ xóa khi stopped, Win32 own-process, tài khoản chuẩn, không có service phụ thuộc hoặc cấu hình nâng cao không phục hồi được; không tự dừng service. Task chỉ nhận các action thuộc ứng dụng và principal không cần mật khẩu; cả hai loại trừ auditing tùy chỉnh hoặc không xác minh được. Backup và bản ghi Rescue được ghi/flush trước khi xóa; lỗi sau bước xóa vẫn giữ bước phục hồi trong lịch sử. XML lưu đúng UTF-8; phục hồi task tạo mới với ACL gốc ngay lúc đăng ký, không ghi đè hoặc kích hoạt registration trigger.
 - [x] Xem trước rồi xóa: thư mục vào Thùng rác, registry xuất ra `.reg` trước khi xóa; Rescue Center có tên bản ghi công cụ và hoàn tác bằng `UndoOp::ImportRegFile`.
 - [x] Chốt an toàn: giao diện/backend chặn cả quét và xóa tàn dư khi khóa Uninstall vẫn còn; ví dụ chỉ-đọc không chọn sẵn bất kỳ tàn dư nào của ứng dụng còn cài. Dọn sạch danh sách/ô chọn cũ khi đổi ứng dụng hoặc quét lại.
 - [x] Bỏ chờ vô hạn: kiểm tra tiến trình mỗi 200 ms, dùng cờ hủy chung; nút Ngừng chờ hoặc rời trang sẽ nhả việc chờ, không tắt trình gỡ. Ẩn nút quay lại danh sách khi đang xử lý và không tự quét sau khi rời trang.
 - [x] Tìm tệp lớn: chọn thư mục người dùng/ổ cố định, ngưỡng 100/500/1024 MB, bỏ qua thư mục hệ thống, đánh dấu AppData, không chọn sẵn; mở Explorer và chuyển tệp vào Thùng rác.
 - [x] Dọn rác thêm bộ nhớ đệm tải Windows Update (`SoftwareDistribution\\Download`), không chọn sẵn.
-- [x] Giao diện Tăng tốc, Dọn dẹp tùy chỉnh (Tìm tệp lớn), Hộp công cụ (Gỡ cài đặt sạch và các mục chưa xây dựng); lối tắt từ Tăng tốc; backend giả cho các công cụ, thông báo Việt/Anh.
+- [x] Giao diện đợt mới: Dọn dẹp có Tệp lớn/Tệp trùng/WinSxS; Tăng tốc có nhóm tinh chỉnh HKCU; Hộp công cụ có tinh chỉnh trình duyệt và Install Monitor. Không chọn sẵn tệp/tinh chỉnh/cache; WinSxS có xác nhận, điểm khôi phục và trạng thái tác vụ nền; Monitor có phiên trước/sau, báo cáo giới hạn và không tự xóa. Ô chọn tệp lớn đã có nhãn truy cập; backend giả và Việt/Anh đã tích hợp.
+- [x] Tệp trùng: lọc theo kích thước/dấu vân tay rồi so nội dung chính xác; giữ bản không chọn đã khóa, loại hardlink/reparse/luồng NTFS phụ. Trước recycle chuyển đối tượng đã xác minh bằng handle vào vùng riêng cùng volume, tạo mới với quyền Administrators/SYSTEM; không fallback theo đường dẫn người dùng hoặc xóa vĩnh viễn. Cần quyền quản trị và filesystem hỗ trợ ACL; khóa staging dùng quyền đọc/liệt kê, chia sẻ đọc/ghi nhưng không share delete, mở quyền cleanup riêng để không tự chặn rename. Ghi bền vị trí gốc, volume/file ID trước chuyển và vị trí Thùng rác sau xác nhận. Kiểm tra lại stream sau shell move; dữ liệu phụ phát sinh vẫn được giữ và không báo success đã xác minh. Nếu không khôi phục được sau lỗi, giữ đường dẫn lưu giữ trong công cụ/Rescue, không tạo hoàn tác giả. Thùng rác của Windows ghi vị trí staging, không tự khôi phục về vị trí gốc; giao diện cảnh báo và giữ ánh xạ gốc/Bin để kiểm tra phục hồi.
+- [x] WinSxS: phân tích và dọn bằng DISM cố định `/English`, `/StartComponentCleanup /NoRestart`; phân tích phải mới và có khuyến nghị, xác nhận/điểm khôi phục trước khi chạy. Lỗi khôi phục chỉ cho bỏ qua sau thất bại và xác nhận riêng. Giữ busy đến khi servicing thật kết thúc, ghi lịch sử trước khi chạy, không `/ResetBase`, không kill/timeout cleanup, báo khởi động lại với 3010.
+- [x] Tối ưu sâu ban đầu và trình duyệt: 7 thiết lập HKCU cố định, sao lưu/kiểm tra lại trước ghi, chặn chính sách trình duyệt HKLM. Chỉ quét Cache/Code Cache/GPUCache/cache2 của Chrome/Edge/Brave/Firefox; không đụng cookie, mật khẩu, lịch sử hay tiện ích, không kill trình duyệt. DNS dùng ipconfig cố định, mở thiết lập mạng Windows; không tự sửa mạng/chính sách bảo mật.
+- [x] Install Monitor: phạm vi thư mục riêng chính xác và registry cố định, trước/sau có giới hạn và lịch sử. Native liệt kê thư mục theo handle, đối chiếu identity/đường dẫn thật, không theo junction khi thư mục đổi; bỏ qua chênh lệch không chắc chắn. ID mili giây tăng dần trong miền số nguyên an toàn JavaScript; tên tối đa 128 byte UTF-8, vendor riêng tối đa 64 ký tự ASCII; chặn gốc dùng chung như `C:\\Tools`. Không tự chạy trình cài, suy đoán sở hữu hay xóa tàn dư.
+- [x] Rescue journal: chỉ coi NotFound là lịch sử chưa tồn tại, báo lỗi dữ liệu hỏng/không đọc được; tạo scratch riêng bằng create_new, chặn hardlink/reparse, sync trước khi xuất bản bằng rename write-through trên Windows. Gia cố đường dẫn không giải quyết tính xác thực payload phục hồi còn tồn đọng bên dưới.
 
 Đã kiểm tra:
 
-- 38 unit test của `tp-core` đạt (giai đoạn 3: 26); gồm hồi quy không chọn sẵn tàn dư khi ứng dụng còn đăng ký dù trình gỡ đã mất, và cờ hủy trước khi mở trình gỡ.
-- `cargo build -p tp-system-care` đạt, không cảnh báo; `npm run check` 0 lỗi/0 cảnh báo; Việt/Anh có 234 khóa. `npm run build` đạt, còn cảnh báo import động của Tauri không tách thành chunk riêng.
+- Đợt mới 18/11/2026: `npm run check` 0 lỗi/0 cảnh báo, `npm run build` đạt, 457 khóa Việt/Anh khớp. Đã tương tác DOM với backend giả cho năm công cụ: giữ một bản tệp trùng, xóa một phần/hủy; WinSxS xác nhận và khôi phục thất bại trước khi cho bỏ qua, busy qua đổi trang, lỗi và mã 3010; tinh chỉnh rồi hoàn tác; cache bị chặn khi trình duyệt chạy, DNS cần xác nhận; Monitor giữ baseline khi hủy/rời trang, thử lại, báo cáo chưa đầy đủ. Kiểm tra hồi quy Tệp lớn/Turbo/RAM/Gỡ sạch/Chăm sóc và xử lý lỗi đọc lịch sử không báo rỗng giả, không có lỗi console ứng dụng. Timer fixture được tăng tốc vì trình duyệt nhúng đang ẩn; không phải phép đo hiệu năng.
+- Đợt mới 18/11/2026: `cargo test -p tp-core -- --include-ignored` đạt 184 test, 0 lỗi/0 ignored; 6 test Tauri đạt. `cargo check --workspace --all-targets`, `cargo build -p tp-system-care`, rustfmt cho module mới và `git diff --check` đều đạt, không cảnh báo Rust. Đã sửa fixture TEMP tên 8.3 bằng chuẩn hóa đường dẫn fixture, không nới luật đường dẫn thật; thêm test luồng NTFS phụ, nguồn được tạo lại, flush/khôi phục thất bại và native Monitor junction/retarget/rename/giới hạn lô. Có 5 trường hợp fixture staging cần elevation chưa thực thi trong phiên không quản trị; số test đạt không chứng minh các nhánh quyền quản trị/DACL đã chạy. Fixture không quản trị đã dùng đúng quyền/share của staging để xác nhận handle transfer không tự bị khóa, giữ ánh xạ gốc/định danh/vị trí sau chuyển và phát hiện ADS phát sinh muộn mà vẫn giữ dữ liệu.
+- Mock bổ sung: Monitor dùng ID cỡ mili giây qua finish/detail không mất chính xác, hiển thị ngày năm 2026; từ chối gốc Tools, tên vượt 128 byte UTF-8 và vendor ngoài 64 ASCII/tên riêng. Lỗi recycle còn dữ liệu lưu giữ được hiển thị đầy đủ ở công cụ và Rescue, không có nút hoàn tác giả. Recycle thành công giữ ánh xạ gốc/Bin và cảnh báo giới hạn Khôi phục của Windows, không báo lỗi giả cho bản ghi thành công. Không lỗi console ứng dụng.
+- 77 test của `tp-core` đạt (`cargo test -p tp-core -- --include-ignored`), không bỏ qua test nào; 2 test Tauri đạt. Gồm ràng buộc phiên/không chạy lại hàng đợi, hủy/lỗi/ứng dụng còn cài, đường dẫn cưỡng bức dùng chung/hệ thống, StartupApproved/Run sửa rồi hoàn tác, cập nhật bản phục hồi không trùng ID, chính sách gói Store và service/task. Fixture PowerShell/COM/SCM chạy trong bộ nhớ, không gỡ gói thật hoặc thay đổi service/task thật.
+- `cargo build -p tp-system-care` đạt, không cảnh báo; `npm run check` 0 lỗi/0 cảnh báo; Việt/Anh có đủ 307 khóa trùng nhau. `npm run build` đạt, còn cảnh báo import động của Tauri không tách thành chunk riêng.
 - Chạy công cụ chỉ-đọc trên máy phát triển: 119 ứng dụng, 19 mục khởi động (15 đang tắt); luật tránh thư mục dùng chung Adobe và không chọn sẵn thư mục lớn đã được đối chiếu. Quét tệp từ 500 MB trong hồ sơ người dùng mất 82,5 giây ở bản debug.
-- Giao diện với backend giả: Tăng tốc, Tìm tệp lớn và luồng gỡ/xóa tàn dư; thử Ngừng chờ, quét/xóa bị chặn khi còn cài, rời trang khi đang chờ, đổi ứng dụng không giữ dữ liệu cũ và thông báo Việt/Anh. Không lỗi console ứng dụng.
+- Giao diện với backend giả: Tăng tốc, Tìm tệp lớn; Gỡ sạch đợt 2 với bộ lọc Desktop/Store/Có sẵn, bảo vệ gói thiết yếu, hàng đợi thành công/lỗi/còn cài/hủy, xét tàn dư riêng từng kết quả, cảnh báo cưỡng bức/mục tiêu ngoài danh sách, lỗi tạo điểm khôi phục phải xác nhận riêng, xóa/hoàn tác lịch sử và nhãn truy cập Việt/Anh. Đã thử rời trang khi đang chờ và chống giữ ô chọn/dữ liệu cũ; Store chỉ hiện dữ liệu gói tài khoản hiện tại, các mục service/task/startup/lối tắt và mọi mục cưỡng bức không chọn sẵn. Không lỗi console ứng dụng.
 
 Còn tồn đọng:
 
-- [ ] Tối ưu sâu; ứng dụng Store/UWP, lần dùng gần nhất và bộ lọc nâng cao.
-- [ ] Tàn dư service, tác vụ định kỳ, lối tắt và mục khởi động; tự tạo điểm khôi phục trước khi gỡ.
-- [ ] Gỡ cưỡng bức, gỡ hàng loạt, ứng dụng Windows cài sẵn; xử lý mục gỡ mồ côi (giao diện hiện chặn khi khóa Uninstall còn, kể cả khi trình gỡ đã mất).
-- [ ] Tiện ích/toolbar trình duyệt, bản cập nhật Windows, Install Monitor và phần mềm đi kèm.
-- [ ] Dọn theo ứng dụng/trình duyệt, tệp trùng và WinSxS; tinh chỉnh trình duyệt (cache, tiện ích nặng, DNS, thiết lập mạng).
-- [ ] Chưa thử thao tác thật qua cửa sổ Tauri: Turbo, giải phóng RAM, bật/tắt khởi động, gỡ ứng dụng, Ngừng chờ trình gỡ thật, xóa tàn dư/hoàn tác registry và Thùng rác. Mới kiểm tra bằng unit test, liệt kê chỉ-đọc và giao diện giả.
-- [ ] Backend giả chưa ghi lịch sử công cụ vào Rescue Center; ô chọn tàn dư/tệp lớn còn thiếu nhãn truy cập.
+- [ ] Tối ưu sâu ngoài nhóm HKCU ban đầu, lần dùng gần nhất và bộ lọc nâng cao ngoài Desktop/Store/Có sẵn.
+- [ ] Service đang chạy, driver, service dùng chung/phụ thuộc/cấu hình nâng cao; task cần mật khẩu, action dùng runner chung; service/task có auditing tùy chỉnh hoặc không xác minh được vẫn bị loại khỏi quét tàn dư để bảo vệ hệ thống.
+- [ ] Store chưa gỡ gói cấp sẵn hoặc gói của tài khoản khác; chưa đo tốc độ liệt kê/quét tàn dư mở rộng trên bản release.
+- [ ] Hoàn tác task có thể làm task chạy theo lịch gốc; không kích hoạt registration trigger khi tái tạo. Xóa tàn dư không có nút hủy giữa một thao tác service/task đang chạy; từng lệnh giới hạn thời gian, kết quả không chắc chắn vẫn giữ bản phục hồi.
+- [ ] Tiện ích/toolbar trình duyệt, bản cập nhật Windows và phần mềm đi kèm.
+- [ ] Dọn theo ứng dụng, tiện ích nặng và chính sách mạng chi tiết chưa triển khai; tối ưu sâu hiện chỉ nhóm HKCU ban đầu.
+- [ ] Chưa thử thao tác thật qua cửa sổ Tauri: Turbo, giải phóng RAM, bật/tắt khởi động, tạo điểm khôi phục, gỡ desktop/Store/hàng loạt/cưỡng bức, Ngừng chờ trình gỡ thật, xóa/hoàn tác service/task/lối tắt/registry, WinSxS, tinh chỉnh HKCU/cache/DNS và Monitor với trình cài thật. Chưa xác minh staging/DACL bằng phiên quản trị hoặc tương thích recycle của shell thật; mới kiểm tra fixture/primitives trên tệp tạm riêng, liệt kê chỉ-đọc và giao diện giả. Cần máy ảo thử nghiệm trước khi dùng trên hệ thống thật.
+- [ ] Chưa kiểm tra trực quan bố cục bằng ảnh chụp: trình duyệt nhúng đang ẩn nên công cụ screenshot không có bề mặt hiển thị; đã kiểm tra tương tác và cấu trúc DOM.
 - [ ] Chưa đo tốc độ quét tệp lớn ở bản release; chưa build lại bộ cài cho giai đoạn 4.
 
 ### Giai đoạn 5 — Bảo vệ, Cập nhật phần mềm, Hộp công cụ
@@ -297,7 +312,10 @@ Còn tồn đọng:
 - **Dọn registry và tối ưu sâu có thể làm hỏng Windows:** mọi thao tác phải sao lưu trước và hoàn tác được; luật ban đầu giữ ở mức thận trọng.
 - **Driver sai có thể gây màn hình xanh hoặc mất thiết bị:** chỉ lấy driver WHQL từ Windows Update, luôn sao lưu và tạo điểm khôi phục, không tự cài khi chạy theo lịch.
 - **Gỡ cưỡng bức và quét tàn dư có thể xóa nhầm tệp dùng chung:** luôn xem trước, mục không chắc chắn để người dùng tự chọn, tệp vào Thùng rác thay vì xóa hẳn.
-- **Tệp lịch sử của Rescue Center nằm trong thư mục người dùng:** bước hoàn tác đọc từ `history.json` rồi ghi vào registry, kể cả HKLM khi ứng dụng chạy quyền quản trị. Tàn dư registry còn được hoàn tác bằng `UndoOp::ImportRegFile` (`reg.exe import`), nên cả đường dẫn lẫn nội dung tệp `.reg` là dữ liệu nhạy cảm. Chương trình chạy quyền thường có thể sửa các tệp này để mượn quyền. Cần chuyển sang thư mục chỉ quản trị viên ghi được khi có `tp-service` (giai đoạn 6).
+- **Tệp trùng có thể là bản sao lưu có chủ ý:** không chọn sẵn; luôn giữ ít nhất một bản đã xác minh trước khi đưa bản khác vào Thùng rác. Dung lượng logic không đồng nghĩa số byte thực tế được giải phóng trên ổ nén/sparse.
+- **WinSxS là kho thành phần hệ thống:** chỉ dọn bằng DISM, không xóa tệp trực tiếp hoặc dùng `/ResetBase`; dọn không hoàn tác bằng Rescue Center và không được cưỡng bức dừng tiến trình servicing.
+- **Install Monitor không chứng minh nguồn gốc thay đổi:** phần mềm khác có thể ghi trong cùng khoảng chụp; nhật ký có phạm vi hữu hạn, không tự coi mọi chênh lệch là tàn dư an toàn để xóa. Tên tệp/khóa registry trong nhật ký cũng là dữ liệu riêng tư.
+- **Tệp lịch sử của Rescue Center nằm trong thư mục người dùng:** bước hoàn tác đọc từ `history.json` rồi ghi vào registry, kể cả HKLM khi ứng dụng chạy quyền quản trị. Tàn dư registry còn được hoàn tác bằng `UndoOp::ImportRegFile` (`reg.exe import`), nên cả đường dẫn lẫn nội dung tệp `.reg` là dữ liệu nhạy cảm. Đợt 2 thêm payload service/task và XML trong cùng cây sao lưu; cần bảo vệ tính toàn vẹn của các dữ liệu này trước khi phát hành, nhất là khi phục hồi tài nguyên chạy bằng SYSTEM. Chương trình chạy quyền thường có thể sửa các tệp này để mượn quyền. Cần chuyển sang thư mục chỉ quản trị viên ghi được khi có `tp-service` (giai đoạn 6).
 - **Khóa thư mục có thể làm mất dữ liệu:** với Khóa mã hóa, mất cả mật khẩu lẫn mã khôi phục là không lấy lại được; phải bắt người dùng lưu mã khôi phục và nói rõ điều này. Mã hóa bị ngắt giữa chừng phải chạy tiếp được, không để tệp ở trạng thái dở.
 - **Khóa nhanh không phải mã hóa:** phải ghi rõ trên giao diện để người dùng không tưởng nó chống được người có quyền quản trị hoặc việc tháo ổ cứng.
 - **Antivirus báo nhầm:** cần chứng chỉ ký mã cho bản phát hành.

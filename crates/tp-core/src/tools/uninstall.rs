@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::modules::startup::parse_command;
+use super::{store_apps, uninstall_entries};
+use crate::modules::startup::{self, parse_command};
 use crate::reg::{self, RawValue};
 use crate::rescue::{self, Rescue, UndoOp};
 use crate::winutil::{self, Known};
@@ -23,11 +24,28 @@ use crate::winutil::{self, Known};
 const UNINSTALL: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 const UNINSTALL_WOW64: &str = "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppKind {
+    Desktop,
+    Store,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UninstallMode {
+    Standard,
+    Forced,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     /// `<HKLM|HKCU>\<khóa Uninstall>`, dùng làm mã.
     pub id: String,
+    pub kind: AppKind,
+    pub built_in: bool,
+    pub removable: bool,
     pub name: String,
     pub publisher: Option<String>,
     pub version: Option<String>,
@@ -45,6 +63,10 @@ pub struct AppInfo {
     pub uninstall: String,
     #[serde(skip)]
     pub msi: bool,
+    #[serde(skip)]
+    pub package: Option<store_apps::Package>,
+    #[serde(skip)]
+    pub synthetic: bool,
 }
 
 fn text(values: &[(String, RawValue)], name: &str) -> Option<String> {
@@ -82,6 +104,9 @@ fn read_app(machine: bool, root: &str, sub: &str) -> Option<AppInfo> {
     }
     Some(AppInfo {
         id: format!("{}\\{key}", reg::hive_name(machine)),
+        kind: AppKind::Desktop,
+        built_in: false,
+        removable: true,
         name,
         publisher: text(&values, "Publisher"),
         version: text(&values, "DisplayVersion"),
@@ -93,11 +118,13 @@ fn read_app(machine: bool, root: &str, sub: &str) -> Option<AppInfo> {
         key,
         uninstall,
         msi: number(&values, "WindowsInstaller") == Some(1),
+        package: None,
+        synthetic: false,
     })
 }
 
-/// Ứng dụng đã cài (Win32 và MSI), sắp theo tên. Ứng dụng Store chưa có.
-pub fn list() -> Vec<AppInfo> {
+/// Ứng dụng Win32 và MSI, sắp theo tên.
+pub fn desktop_list() -> Vec<AppInfo> {
     let mut apps: Vec<AppInfo> = Vec::new();
     for (machine, root) in [(true, UNINSTALL), (true, UNINSTALL_WOW64), (false, UNINSTALL)] {
         for sub in reg::subkeys(machine, root) {
@@ -116,8 +143,48 @@ pub fn list() -> Vec<AppInfo> {
     apps
 }
 
+pub fn list() -> Result<Vec<AppInfo>, String> {
+    let mut apps = desktop_list();
+    for package in store_apps::list()? {
+        apps.push(AppInfo {
+            id: format!("store:{}", package.full_name),
+            kind: AppKind::Store,
+            built_in: package.built_in,
+            removable: package.removable,
+            name: package.display_name.clone(),
+            publisher: Some(package.publisher.clone()),
+            version: Some(package.version.clone()),
+            install_date: None,
+            size: None,
+            install_location: package.install_location.clone(),
+            needs_admin: false,
+            machine: false,
+            key: String::new(),
+            uninstall: String::new(),
+            msi: false,
+            package: Some(package),
+            synthetic: false,
+        });
+    }
+    apps.sort_by_key(|app| app.name.to_lowercase());
+    Ok(apps)
+}
+
 pub fn still_installed(app: &AppInfo) -> bool {
-    !reg::values(app.machine, &app.key).is_empty()
+    if let Some(package) = &app.package {
+        return store_apps::is_installed(&package.full_name).unwrap_or(true);
+    }
+    if app.synthetic { return false; }
+    #[cfg(windows)]
+    {
+        use winreg::{enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}, RegKey};
+        match RegKey::predef(if app.machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER }).open_subkey(&app.key) {
+            Ok(_) => true,
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
+    }
+    #[cfg(not(windows))]
+    { !reg::values(app.machine, &app.key).is_empty() }
 }
 
 /// Tách dòng lệnh gỡ thành chương trình và tham số.
@@ -165,6 +232,16 @@ pub fn run_uninstaller(app: &AppInfo, cancel: &AtomicBool) -> Result<UninstallRe
     use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+    if !app.removable || app.synthetic {
+        return Err("protected_app".into());
+    }
+    if let Some(package) = &app.package {
+        store_apps::uninstall(&package.full_name, cancel)?;
+        return Ok(UninstallResult {
+            exit_code: Some(0),
+            still_installed: still_installed(app),
+        });
+    }
     let (program, args) = uninstall_command(app);
     if program.is_empty() {
         return Err("no_uninstaller".into());
@@ -230,6 +307,94 @@ pub fn run_uninstaller(_app: &AppInfo, _cancel: &AtomicBool) -> Result<Uninstall
     Err("chỉ hỗ trợ Windows".into())
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchUninstallItem {
+    pub id: String,
+    pub name: String,
+    pub result: Option<UninstallResult>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchUninstallReport {
+    pub items: Vec<BatchUninstallItem>,
+    pub pending: Vec<String>,
+    pub cancelled: bool,
+}
+
+pub fn run_batch(apps: &[AppInfo], cancel: &AtomicBool, progress: &dyn Fn(usize, usize, &str)) -> BatchUninstallReport {
+    batch_with(apps, cancel, progress, |app| run_uninstaller(app, cancel))
+}
+
+fn batch_with(
+    apps: &[AppInfo],
+    cancel: &AtomicBool,
+    progress: &dyn Fn(usize, usize, &str),
+    run: impl Fn(&AppInfo) -> Result<UninstallResult, String>,
+) -> BatchUninstallReport {
+    let mut report = BatchUninstallReport::default();
+    for (index, app) in apps.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        progress(index + 1, apps.len(), &app.name);
+        let (result, error) = match run(app) {
+            Ok(result) => (Some(result), None),
+            Err(error) => (None, Some(error)),
+        };
+        let stop = error.is_some() || result.as_ref().is_some_and(|r| r.still_installed);
+        report.items.push(BatchUninstallItem { id: app.id.clone(), name: app.name.clone(), result, error });
+        // Một số trình gỡ thoát sớm và chuyển việc gỡ sang tiến trình con.
+        if stop {
+            break;
+        }
+    }
+    report.pending = apps.iter().skip(report.items.len()).map(|a| a.id.clone()).collect();
+    report.cancelled = cancel.load(Ordering::SeqCst);
+    report
+}
+
+pub fn force_target(name: &str, path: &str, installed: &[AppInfo]) -> Result<AppInfo, String> {
+    let name = name.trim();
+    if name_variants(name).is_empty() || name.chars().any(char::is_control) {
+        return Err("invalid_force_target".into());
+    }
+    let original = PathBuf::from(winutil::expand_env(path.trim().trim_matches('"')));
+    if !original.is_absolute() || !original.is_dir() || !winutil::on_fixed_drive(&original) {
+        return Err("invalid_force_target".into());
+    }
+    let canonical = original.canonicalize().map_err(|_| "invalid_force_target".to_string())?;
+    if path_key(&original) != path_key(&canonical) || protected(&canonical) {
+        return Err("invalid_force_target".into());
+    }
+    let location = canonical.to_string_lossy().trim_start_matches("\\\\?\\").to_string();
+    let app = AppInfo {
+        id: format!("forced:{}", path_key(&canonical)),
+        kind: AppKind::Desktop,
+        built_in: false,
+        removable: true,
+        name: name.to_string(),
+        publisher: None,
+        version: None,
+        install_date: None,
+        size: None,
+        install_location: Some(location),
+        needs_admin: false,
+        machine: false,
+        key: String::new(),
+        uninstall: String::new(),
+        msi: false,
+        package: None,
+        synthetic: true,
+    };
+    if shared(&canonical, &app, installed) {
+        return Err("shared_force_target".into());
+    }
+    Ok(app)
+}
+
 // ------------------------------------------------------------ Tàn dư
 
 #[derive(Clone, Debug, Serialize)]
@@ -249,6 +414,9 @@ pub struct Leftover {
 pub enum LeftoverTarget {
     Folder(PathBuf),
     RegistryKey { machine: bool, subkey: String },
+    Shortcut { path: PathBuf, target: PathBuf },
+    Startup { machine: bool, subkey: String, name: String, value: RawValue, approved: String },
+    SystemEntry(uninstall_entries::Entry),
 }
 
 /// Tên quá chung: thư mục hay khóa trùng tên này gần như chắc chắn dùng chung.
@@ -261,6 +429,9 @@ const GENERIC: &[&str] = &[
 /// Các dạng tên để dò: tên đầy đủ, và tên đã bỏ phần phiên bản
 /// (ví dụ "7-Zip 23.01 (x64)" → "7-Zip").
 fn name_variants(name: &str) -> Vec<String> {
+    if name.contains(['\\', '/', ':']) || name.contains("..") || name.chars().any(char::is_control) {
+        return Vec::new();
+    }
     let mut variants = vec![name.trim().to_string()];
     let words: Vec<&str> = name.split_whitespace().collect();
     let cut = words
@@ -280,28 +451,42 @@ fn name_variants(name: &str) -> Vec<String> {
 }
 
 /// Thư mục không bao giờ được coi là tàn dư.
+fn path_key(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "\\").trim_start_matches("\\\\?\\").trim_end_matches('\\').to_lowercase()
+}
+
+fn contains_path(root: &Path, path: &Path) -> bool {
+    let root = path_key(root);
+    let path = path_key(path);
+    !root.is_empty() && (path == root || path.starts_with(&format!("{root}\\")))
+}
+
 fn protected(path: &Path) -> bool {
     let roots = [
-        Known::Windows,
-        Known::Profile,
-        Known::ProgramFiles,
-        Known::ProgramFilesX86,
-        Known::ProgramData,
-        Known::LocalAppData,
-        Known::RoamingAppData,
-        Known::UserProgramFiles,
-        Known::StartMenu,
-        Known::CommonStartMenu,
-        Known::Desktop,
+        Known::Windows, Known::Profile, Known::ProgramFiles, Known::ProgramFilesX86,
+        Known::ProgramData, Known::LocalAppData, Known::RoamingAppData,
+        Known::UserProgramFiles, Known::StartMenu, Known::CommonStartMenu,
+        Known::Desktop, Known::PublicDesktop, Known::Startup, Known::CommonStartup,
     ];
-    let windows = winutil::known_folder(Known::Windows);
-    path.parent().is_none()
-        || windows.is_some_and(|w| path.starts_with(w))
-        || roots
-            .iter()
-            .filter_map(|&k| winutil::known_folder(k))
-            .any(|root| root == path || root.starts_with(path))
-        || std::env::current_exe().is_ok_and(|exe| exe.starts_with(path))
+    let protected_personal = winutil::known_folder(Known::Profile).is_some_and(|profile| {
+        ["Documents", "Downloads", "Pictures", "Music", "Videos", "AppData\\LocalLow"]
+            .iter().any(|name| contains_path(path, &profile.join(name)))
+    });
+    let protected_program = [Known::ProgramFiles, Known::ProgramFilesX86].into_iter().filter_map(winutil::known_folder).any(|root| {
+        ["Common Files", "Windows Defender", "Windows Defender Advanced Threat Protection", "Windows NT", "WindowsPowerShell", "Internet Explorer", "Microsoft", "MSBuild", "Reference Assemblies", "Windows Kits", "ModifiableWindowsApps"]
+            .iter().any(|name| contains_path(&root.join(name), path) || contains_path(path, &root.join(name)))
+    });
+    let protected_drive = path.ancestors().last().is_some_and(|root| {
+        ["$Recycle.Bin", "System Volume Information", "Recovery", "Boot"].iter().any(|name| contains_path(&root.join(name), path))
+    });
+    let protected_data = winutil::known_folder(Known::ProgramData).is_some_and(|root| contains_path(&root.join("Microsoft"), path));
+    path.parent().is_none() || protected_program || protected_drive || protected_data
+        || winutil::known_folder(Known::Windows).is_some_and(|root| contains_path(&root, path))
+        || [Known::ProgramFiles, Known::ProgramFilesX86].into_iter().filter_map(winutil::known_folder)
+            .any(|root| contains_path(&root.join("WindowsApps"), path))
+        || roots.into_iter().filter_map(winutil::known_folder).any(|root| contains_path(path, &root))
+        || protected_personal
+        || std::env::current_exe().is_ok_and(|exe| contains_path(path, &exe))
 }
 
 /// Đường dẫn mà một ứng dụng khác đang dùng: thư mục cài và nơi đặt trình gỡ.
@@ -332,9 +517,9 @@ fn shared(path: &Path, app: &AppInfo, others: &[AppInfo]) -> bool {
         || (!publisher.is_empty() && (folder == publisher || folder == vendor))
         || others
             .iter()
-            .filter(|other| other.id != app.id && other.name != app.name)
+            .filter(|other| other.id != app.id)
             .flat_map(paths_of)
-            .any(|other| other.starts_with(path))
+            .any(|other| contains_path(path, &other) || contains_path(&other, path))
 }
 
 /// Tàn dư thật thường nhỏ. Thư mục còn lớn sau khi gỡ, nằm ngay dưới gốc ổ đĩa
@@ -361,7 +546,23 @@ fn safe_to_preselect(path: &Path, bytes: u64) -> bool {
 /// Quét tàn dư của một ứng dụng (thường gọi sau khi trình gỡ chạy xong).
 /// `installed` là danh sách ứng dụng còn cài, dùng để tránh thư mục dùng chung.
 pub fn scan_leftovers(app: &AppInfo, installed: &[AppInfo]) -> Vec<Leftover> {
+    scan_base(app, installed, false)
+}
+
+fn scan_base(app: &AppInfo, installed: &[AppInfo], forced: bool) -> Vec<Leftover> {
     let mut found: Vec<Leftover> = Vec::new();
+    if let Some(package) = &app.package {
+        if let Some(local) = winutil::known_folder(Known::LocalAppData) {
+            let path = local.join("Packages").join(&package.family_name);
+            if path.is_dir() && !protected(&path) {
+                found.push(Leftover {
+                    id: "leftover:0".into(), kind: "folder", path: path.to_string_lossy().to_string(),
+                    bytes: winutil::dir_size(&path), recommended: false, target: LeftoverTarget::Folder(path),
+                });
+            }
+        }
+        return found;
+    }
     let mut add_folder = |path: PathBuf, recommended: bool| {
         let path = PathBuf::from(path.to_string_lossy().trim_end_matches('\\'));
         if !path.is_dir()
@@ -387,7 +588,7 @@ pub fn scan_leftovers(app: &AppInfo, installed: &[AppInfo]) -> Vec<Leftover> {
     }
 
     let names = name_variants(&app.name);
-    let publisher = app.publisher.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let publisher = app.publisher.as_deref().map(str::trim).filter(|p| !p.is_empty() && !p.contains(['\\', '/', ':']) && !p.contains("..") && !p.chars().any(char::is_control));
     // Vị trí cài chương trình: chọn sẵn. Vị trí dữ liệu: để người dùng chọn.
     let places = [
         (Known::ProgramFiles, true),
@@ -416,6 +617,9 @@ pub fn scan_leftovers(app: &AppInfo, installed: &[AppInfo]) -> Vec<Leftover> {
 
     for (machine, software) in [(false, "Software"), (true, "SOFTWARE"), (true, "SOFTWARE\\WOW6432Node")] {
         for name in &names {
+            if installed.iter().filter(|other| other.id != app.id).any(|other| name_variants(&other.name).iter().any(|variant| variant.eq_ignore_ascii_case(name))) {
+                continue;
+            }
             let mut keys = vec![format!("{software}\\{name}")];
             if let Some(publisher) = publisher {
                 keys.push(format!("{software}\\{publisher}\\{name}"));
@@ -437,10 +641,10 @@ pub fn scan_leftovers(app: &AppInfo, installed: &[AppInfo]) -> Vec<Leftover> {
     }
 
     // Mục còn trong danh sách đã cài nhưng trình gỡ đã mất: mục mồ côi.
-    if still_installed(app) {
+    if app.package.is_none() && !app.synthetic && still_installed(app) {
         let (program, _) = uninstall_command(app);
         let missing = !program.eq_ignore_ascii_case("msiexec.exe") && crate::modules::shortcut::is_missing(Path::new(&program));
-        if missing {
+        if missing || forced {
             found.push(Leftover {
                 id: String::new(),
                 kind: "uninstallEntry",
@@ -458,9 +662,131 @@ pub fn scan_leftovers(app: &AppInfo, installed: &[AppInfo]) -> Vec<Leftover> {
     let app_installed = still_installed(app);
     for (index, leftover) in found.iter_mut().enumerate() {
         leftover.id = format!("leftover:{index}");
-        leftover.recommended &= !app_installed;
+        leftover.recommended &= !app_installed && !forced;
     }
     found
+}
+
+fn safe_path(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+        && match path.canonicalize() {
+            Ok(canonical) => path_key(path) == path_key(&canonical),
+            Err(_) => matches!(path.try_exists(), Ok(false)),
+        }
+}
+
+fn safe_folder(path: &Path) -> bool {
+    if !safe_path(path) || protected(path) || !path.is_dir() {
+        return false;
+    }
+    walkdir::WalkDir::new(path).follow_links(false).into_iter().all(|entry| {
+        let Ok(entry) = entry else { return false };
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else { return false };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            metadata.file_attributes() & 0x400 == 0
+        }
+        #[cfg(not(windows))]
+        { !metadata.file_type().is_symlink() }
+    })
+}
+
+fn owned_targets(app: &AppInfo, installed: &[AppInfo]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    if app.kind == AppKind::Store {
+        return (Vec::new(), Vec::new());
+    }
+    let mut roots = Vec::new();
+    if let Some(location) = &app.install_location {
+        let root = PathBuf::from(winutil::expand_env(location));
+        if safe_path(&root) && !protected(&root) && !shared(&root, app, installed) {
+            roots.push(root);
+        }
+    }
+    let mut files = Vec::new();
+    let (program, _) = uninstall_command(app);
+    let file = PathBuf::from(program);
+    if let Some(parent) = file.parent() {
+        if safe_path(&file) && !protected(&file) && !protected(parent) && !shared(parent, app, installed) {
+            files.push(file.clone());
+            if !roots.iter().any(|root| contains_path(root, parent)) {
+                roots.push(parent.to_path_buf());
+            }
+        }
+    }
+    (roots, files)
+}
+
+fn owns(target: &Path, roots: &[PathBuf], files: &[PathBuf]) -> bool {
+    safe_path(target) && !protected(target)
+        && (roots.iter().any(|root| contains_path(root, target))
+            || files.iter().any(|file| path_key(file) == path_key(target)))
+}
+
+pub fn scan_with_mode(app: &AppInfo, installed: &[AppInfo], mode: UninstallMode) -> Result<Vec<Leftover>, String> {
+    if !app.removable || mode == UninstallMode::Forced && app.kind != AppKind::Desktop {
+        return Err("protected_app".into());
+    }
+    if mode == UninstallMode::Standard && still_installed(app) {
+        return Err("still_installed".into());
+    }
+    if app.synthetic {
+        let path = app.install_location.as_deref().ok_or("invalid_force_target")?;
+        force_target(&app.name, path, installed)?;
+    }
+    let mut found = scan_base(app, installed, mode == UninstallMode::Forced);
+    let (roots, files) = owned_targets(app, installed);
+    if roots.is_empty() && files.is_empty() {
+        return Ok(found);
+    }
+    for (machine, subkey, approved) in [
+        (false, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", "Run"),
+        (true, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", "Run"),
+        (true, "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", "Run32"),
+    ] {
+        for (name, value) in reg::values(machine, subkey) {
+            let Some(command) = value.as_string() else { continue };
+            let Some(target) = parse_command(&command) else { continue };
+            if !owns(&target, &roots, &files) { continue; }
+            found.push(Leftover {
+                id: String::new(), kind: "startup", path: format!("{}\\{subkey}\\{name}", reg::hive_name(machine)),
+                bytes: 0, recommended: false,
+                target: LeftoverTarget::Startup { machine, subkey: subkey.into(), name, value, approved: format!("{}\\{approved}", startup::APPROVED) },
+            });
+        }
+    }
+    for known in [Known::Desktop, Known::PublicDesktop, Known::StartMenu, Known::CommonStartMenu, Known::Startup, Known::CommonStartup] {
+        let Some(root) = winutil::known_folder(known) else { continue };
+        for entry in walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if !entry.file_type().is_file() || !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("lnk")) || !safe_path(path) {
+                continue;
+            }
+            if found.iter().any(|leftover| match &leftover.target {
+                LeftoverTarget::Folder(folder) => contains_path(folder, path),
+                LeftoverTarget::Shortcut { path: other, .. } => path_key(other) == path_key(path),
+                _ => false,
+            }) { continue; }
+            let Some(target) = winutil::shortcut_target(path) else { continue };
+            if !owns(&target, &roots, &files) { continue; }
+            found.push(Leftover {
+                id: String::new(), kind: "shortcut", path: path.to_string_lossy().to_string(),
+                bytes: 0, recommended: false, target: LeftoverTarget::Shortcut { path: path.to_path_buf(), target },
+            });
+        }
+    }
+    for entry in uninstall_entries::scan(&roots, &files)? {
+        found.push(Leftover {
+            id: String::new(), kind: entry.kind, path: format!("{} → {}", entry.path, entry.detail), bytes: 0, recommended: false,
+            target: LeftoverTarget::SystemEntry(entry),
+        });
+    }
+    for (index, leftover) in found.iter_mut().enumerate() {
+        leftover.id = format!("leftover:{index}");
+        leftover.recommended &= mode == UninstallMode::Standard;
+    }
+    Ok(found)
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -479,7 +805,28 @@ pub fn remove_leftovers(leftovers: &[Leftover], rescue: &Rescue, title: &str) ->
     let mut undo = Vec::new();
     for (index, leftover) in leftovers.iter().enumerate() {
         let ok = match &leftover.target {
-            LeftoverTarget::Folder(path) => !protected(path) && winutil::recycle(path).is_ok(),
+            LeftoverTarget::Folder(path) => safe_folder(path) && winutil::recycle(path).is_ok(),
+            LeftoverTarget::Shortcut { path, target } => {
+                if safe_path(path) && winutil::shortcut_target(path).is_some_and(|current| path_key(&current) == path_key(target)) {
+                    match rescue.quarantine(record_id, path) {
+                        Ok(op) => { undo.push(op); true }
+                        Err(_) => false,
+                    }
+                } else { false }
+            }
+            LeftoverTarget::Startup { machine, subkey, name, value, approved } => {
+                remove_startup(*machine, subkey, name, value, approved, rescue, record_id, index, &mut undo).is_ok()
+            }
+            LeftoverTarget::SystemEntry(entry) => {
+                uninstall_entries::remove(entry, rescue, record_id, index, &mut |entry| {
+                    let op = UndoOp::RestoreUninstallEntry { entry: entry.clone() };
+                    let mut pending = undo.clone();
+                    pending.push(op.clone());
+                    rescue.add_tool_record(record_id, title, report.done, report.failed, report.bytes, pending)?;
+                    undo.push(op);
+                    Ok(())
+                }).is_ok()
+            },
             LeftoverTarget::RegistryKey { machine, subkey } => {
                 let key = format!("{}\\{subkey}", reg::hive_name(*machine));
                 match rescue::export_registry_key(rescue, record_id, &key, &format!("leftover-{index}.reg")) {
@@ -502,10 +849,38 @@ pub fn remove_leftovers(leftovers: &[Leftover], rescue: &Rescue, title: &str) ->
             report.failed += 1;
         }
     }
-    if report.done > 0 && rescue.add_tool_record(record_id, title, report.done, report.failed, report.bytes, undo).is_ok() {
+    if (report.done > 0 || !undo.is_empty()) && rescue.add_tool_record(record_id, title, report.done, report.failed, report.bytes, undo).is_ok() {
         report.record_id = Some(record_id);
     }
     report
+}
+
+fn remove_startup(
+    machine: bool, subkey: &str, name: &str, value: &RawValue, approved: &str,
+    rescue: &Rescue, record_id: u64, index: usize, undo: &mut Vec<UndoOp>,
+) -> Result<(), String> {
+    if reg::read(machine, subkey, name).as_ref() != Some(value) {
+        return Err("changed_target".into());
+    }
+    let previous = reg::read(machine, approved, name);
+    let ops = vec![
+        UndoOp::RestoreRegistryValue { machine, subkey: subkey.into(), name: name.into(), previous: Some(value.clone()) },
+        UndoOp::RestoreRegistryValue { machine, subkey: approved.into(), name: name.into(), previous: previous.clone() },
+    ];
+    let dir = rescue.record_dir(record_id).join("startup");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    std::fs::write(dir.join(format!("{index}.json")), serde_json::to_vec(&ops).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    reg::delete_value(machine, subkey, name)?;
+    if previous.is_some() {
+        if let Err(error) = reg::delete_value(machine, approved, name) {
+            if reg::write(machine, subkey, name, value).is_err() {
+                undo.push(ops[0].clone());
+            }
+            return Err(error);
+        }
+    }
+    undo.extend(ops);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -520,6 +895,91 @@ mod tests {
         assert_eq!(name_variants("Zalo v24.10"), vec!["Zalo v24.10", "Zalo"]);
         assert!(name_variants("Google").is_empty());
         assert!(name_variants("Go").is_empty());
+    }
+
+    #[test]
+    fn path_matching_requires_boundaries_and_handles_windows_case() {
+        assert!(contains_path(Path::new("C:\\Apps\\Tool"), Path::new("c:/apps/TOOL/bin/app.exe")));
+        assert!(!contains_path(Path::new("C:\\Apps\\Tool"), Path::new("C:\\Apps\\Toolbox\\app.exe")));
+        assert!(name_variants("..\\Windows").is_empty());
+        assert!(name_variants("Vendor/App").is_empty());
+        assert!(name_variants("App\nName").is_empty());
+    }
+
+    #[test]
+    fn batch_stops_after_a_still_installed_result() {
+        let apps = [app("one", "First App", "Vendor", "C:\\TestOne"), app("two", "Second App", "Vendor", "C:\\TestTwo")];
+        let calls = std::cell::Cell::new(0);
+        let report = batch_with(&apps, &AtomicBool::new(false), &|_, _, _| {}, |_| {
+            calls.set(calls.get() + 1);
+            Ok(UninstallResult { exit_code: None, still_installed: true })
+        });
+        assert_eq!(calls.get(), 1);
+        assert_eq!(report.pending, ["two"]);
+        assert!(!report.cancelled);
+    }
+
+    #[test]
+    fn batch_cancellation_keeps_the_queue_pending() {
+        let apps = [app("one", "First App", "Vendor", "C:\\TestOne"), app("two", "Second App", "Vendor", "C:\\TestTwo")];
+        let cancel = AtomicBool::new(false);
+        let report = batch_with(&apps, &cancel, &|_, _, _| {}, |_| {
+            cancel.store(true, Ordering::SeqCst);
+            Ok(UninstallResult { exit_code: Some(0), still_installed: false })
+        });
+        assert_eq!(report.items.len(), 1);
+        assert_eq!(report.pending, ["two"]);
+        assert!(report.cancelled);
+        let cancelled = batch_with(&apps, &cancel, &|_, _, _| {}, |_| panic!("must not launch"));
+        assert!(cancelled.items.is_empty());
+        assert_eq!(cancelled.pending.len(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn force_targets_reject_shared_and_protected_roots() {
+        let root = std::env::temp_dir().join(format!("TPForceFixture{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = PathBuf::from(root.canonicalize().unwrap().to_string_lossy().trim_start_matches("\\\\?\\"));
+        let target = force_target("Fixture App", &root.to_string_lossy(), &[]).unwrap();
+        let mut other = target.clone();
+        other.id = "another".into();
+        let shared_result = force_target("Fixture App", &root.to_string_lossy(), &[other]);
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let parent = app("parent", "Parent App", "Vendor", &root.to_string_lossy());
+        let nested_result = force_target("Fixture App", &nested.to_string_lossy(), &[parent]);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(shared_result.unwrap_err(), "shared_force_target");
+        assert_eq!(nested_result.unwrap_err(), "shared_force_target");
+        let windows = winutil::known_folder(Known::Windows).unwrap();
+        assert_eq!(force_target("Fixture App", &windows.to_string_lossy(), &[]).unwrap_err(), "invalid_force_target");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_cleanup_preserves_raw_values_and_rejects_changed_targets() {
+        let root = format!("Software\\TPStartupFixture{}", std::process::id());
+        let run = format!("{root}\\Run");
+        let approved = format!("{root}\\Approved");
+        let value = RawValue::sz("C:\\Fixture\\app.exe --start");
+        let state = RawValue { vtype: reg::REG_BINARY, bytes: vec![3, 0, 0, 0, 8, 7, 6] };
+        reg::write(false, &run, "fixture", &value).unwrap();
+        reg::write(false, &approved, "fixture", &state).unwrap();
+        let dir = std::env::temp_dir().join(format!("TPStartupRescueFixture{}", std::process::id()));
+        let rescue = Rescue::at(dir.clone());
+        let mut undo = Vec::new();
+        remove_startup(false, &run, "fixture", &value, &approved, &rescue, 1, 0, &mut undo).unwrap();
+        let removed = reg::read(false, &run, "fixture").is_none() && reg::read(false, &approved, "fixture").is_none();
+        rescue.add_tool_record(1, "fixture", 1, 0, 0, undo).unwrap();
+        rescue.undo(1).unwrap();
+        let restored = reg::read(false, &run, "fixture") == Some(value.clone()) && reg::read(false, &approved, "fixture") == Some(state);
+        reg::write(false, &run, "fixture", &RawValue::sz("C:\\Other\\app.exe")).unwrap();
+        let changed = remove_startup(false, &run, "fixture", &value, &approved, &rescue, 2, 0, &mut Vec::new());
+        reg::delete_key(false, &root).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(removed && restored);
+        assert_eq!(changed.unwrap_err(), "changed_target");
     }
 
     #[test]
@@ -561,6 +1021,9 @@ mod tests {
     fn app(id: &str, name: &str, publisher: &str, location: &str) -> AppInfo {
         AppInfo {
             id: id.into(),
+            kind: AppKind::Desktop,
+            built_in: false,
+            removable: true,
             name: name.into(),
             publisher: Some(publisher.into()),
             version: None,
@@ -572,6 +1035,8 @@ mod tests {
             key: format!("SOFTWARE\\Test\\{id}"),
             uninstall: format!("\"{location}\\uninst.exe\""),
             msi: false,
+            package: None,
+            synthetic: false,
         }
     }
 
@@ -584,8 +1049,7 @@ mod tests {
 
         // Thư mục chung của hãng, đang chứa một ứng dụng khác còn cài.
         assert!(shared(Path::new("C:\\Program Files\\Adobe"), &effects, &installed));
-        // Thư mục riêng của chính ứng dụng thì không tính là dùng chung.
-        assert!(!shared(Path::new("C:\\Program Files\\Adobe\\Adobe Bridge 2026"), &bridge, &installed));
+        assert!(shared(Path::new("C:\\Program Files\\Adobe\\Adobe Bridge 2026"), &bridge, &installed));
         assert!(!shared(Path::new("C:\\Program Files\\7-Zip"), &zip, &installed));
         // Thư mục trùng tên hãng.
         let pavlov = app("ip", "Tool", "Igor Pavlov", "C:\\Program Files\\Igor Pavlov");
@@ -639,7 +1103,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn installed_apps_have_names_and_uninstallers() {
-        let apps = list();
+        let apps = desktop_list();
         assert!(!apps.is_empty());
         assert!(apps.iter().all(|a| !a.name.is_empty() && !a.uninstall.is_empty()));
     }

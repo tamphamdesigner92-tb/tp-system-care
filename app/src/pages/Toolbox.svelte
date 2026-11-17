@@ -1,10 +1,12 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import Uninstaller from '../lib/components/Uninstaller.svelte';
+  import Tuning from '../lib/components/Tuning.svelte';
+  import InstallMonitor from '../lib/components/InstallMonitor.svelte';
   import { t, type Key } from '../lib/i18n.svelte';
 
   /** Công cụ đang mở; `null` là lưới công cụ. */
-  let { tool = $bindable(null) }: { tool: 'uninstaller' | null } = $props();
+  let { tool = $bindable(null) }: { tool: 'uninstaller' | 'browser' | 'monitor' | null } = $props();
 
   const upcoming: Key[] = [
     'toolbox.lock',
@@ -24,12 +26,26 @@
       <h1>{t('toolbox.uninstaller')}</h1>
     </header>
     <Uninstaller />
+  {:else if tool === 'browser' || tool === 'monitor'}
+    <header>
+      <button class="link" onclick={() => (tool = null)}><Icon name="back" size={14} /> {t('nav.toolbox')}</button>
+      <h1>{t(tool === 'browser' ? 'toolbox.browser' : 'toolbox.monitor')}</h1>
+    </header>
+    {#if tool === 'browser'}<Tuning area="browser" />{:else}<InstallMonitor />{/if}
   {:else}
     <h1>{t('nav.toolbox')}</h1>
     <div class="grid">
       <button class="tool" onclick={() => (tool = 'uninstaller')}>
         <span class="tool-name">{t('toolbox.uninstaller')}</span>
         <span class="tool-desc">{t('toolbox.uninstallerDesc')}</span>
+      </button>
+      <button class="tool" onclick={() => (tool = 'browser')}>
+        <span class="tool-name">{t('toolbox.browser')}</span>
+        <span class="tool-desc">{t('toolbox.browserDesc')}</span>
+      </button>
+      <button class="tool" onclick={() => (tool = 'monitor')}>
+        <span class="tool-name">{t('toolbox.monitor')}</span>
+        <span class="tool-desc">{t('toolbox.monitorDesc')}</span>
       </button>
       {#each upcoming as key (key)}
         <div class="tool off">
@@ -74,6 +90,8 @@
   }
 
   .grid {
+    overflow-y: auto;
+    min-height: 0;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 10px;

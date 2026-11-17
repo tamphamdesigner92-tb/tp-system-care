@@ -1,25 +1,44 @@
 <script lang="ts">
   import { formatBytes, formatCount, formatTime } from '../lib/format';
-  import { t, tOr, type Key } from '../lib/i18n.svelte';
+  import { t, tOr } from '../lib/i18n.svelte';
   import { createRestorePoint, rescueHistory, rescueUndo, type RescueRecord } from '../lib/scan';
   import { inTauri } from '../lib/tauri';
 
   let records = $state<RescueRecord[]>([]);
   let busy = $state(false);
+  let loaded = $state(false);
   let message = $state<{ text: string; ok: boolean } | null>(null);
 
   const errorText = (error: unknown) => tOr(`rescue.err.${error}`, String(error));
 
-  /** Bản ghi của công cụ có `title` dạng `uninstall:<tên ứng dụng>` hoặc `largeFiles`. */
   function describe(record: RescueRecord): string {
     if (record.title?.startsWith('uninstall:')) return t('rescue.uninstall', { name: record.title.slice(10) });
-    if (record.title === 'largeFiles') return t('rescue.largeFiles');
-    return record.modules.map((m) => t(`item.${m}` as Key)).join(', ');
+    if (record.title) {
+      const title = /^(duplicateFiles|browserCache); /.test(record.title) ? record.title.split('; ', 1)[0] : record.title;
+      return tOr(`rescue.${title}`, title);
+    }
+    return record.modules.map((m) => tOr(`item.${m}`, m)).join(', ') || t('rescue.unknown');
+  }
+
+  function recovery(record: RescueRecord): string[] {
+    if (!record.title || !/^(duplicateFiles|browserCache); /.test(record.title)) return [];
+    try {
+      const value: unknown = JSON.parse(record.title.slice(record.title.indexOf('; ') + 2));
+      return Array.isArray(value) && value.every((detail) => typeof detail === 'string') ? value : [];
+    } catch {
+      return [record.title];
+    }
   }
 
   async function load() {
     if (!inTauri()) return;
-    records = await rescueHistory();
+    try {
+      records = await rescueHistory();
+      loaded = true;
+    } catch (error) {
+      loaded = false;
+      message = { text: errorText(error), ok: false };
+    }
   }
 
   async function undo(record: RescueRecord) {
@@ -64,15 +83,23 @@
     <p class="message" class:bad={!message.ok} role="status">{message.text}</p>
   {/if}
 
-  {#if records.length === 0}
-    <p class="empty">{inTauri() ? t('rescue.empty') : t('rescue.needApp')}</p>
+  {#if !inTauri()}
+    <p class="empty">{t('rescue.needApp')}</p>
+  {:else if !loaded}
+    {#if !message}<p class="empty">{t('uninstall.working')}</p>{/if}
+  {:else if records.length === 0}
+    <p class="empty">{t('rescue.empty')}</p>
   {:else}
     <ul>
       {#each records as record (record.id)}
+        {@const pending = recovery(record)}
         <li>
           <div class="info">
             <span class="time">{formatTime(record.time)}</span>
             <span class="what">{describe(record)}</span>
+            {#if pending.length}<details class="recovery"><summary>{t(pending.every((detail) => detail.startsWith('recycled: ')) ? 'maintenance.recycledLocation' : 'maintenance.recovery')}</summary>
+              {#each pending as detail}<p>{detail}</p>{/each}
+            </details>{/if}
           </div>
           <span class="amount">
             {t('rescue.items', { n: formatCount(record.done) })}{record.bytes > 0 ? ` · ${formatBytes(record.bytes)}` : ''}
@@ -182,6 +209,13 @@
     text-overflow: ellipsis;
     font-size: 12px;
     color: var(--text-faint);
+  }
+
+  .recovery {
+    color: var(--warn);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    user-select: text;
   }
 
   .amount {

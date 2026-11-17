@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '../lib/components/Icon.svelte';
   import Toggle from '../lib/components/Toggle.svelte';
+  import Tuning from '../lib/components/Tuning.svelte';
   import { formatBytes } from '../lib/format';
   import { t, tOr, type Key } from '../lib/i18n.svelte';
   import { inTauri } from '../lib/tauri';
@@ -19,6 +20,7 @@
 
   let { onuninstall }: { onuninstall: () => void } = $props();
 
+  let tab = $state<'standard' | 'deep'>('standard');
   let memory = $state<Memory | null>(null);
   let turbo = $state<Turbo | null>(null);
   let items = $state<StartupItem[]>([]);
@@ -84,6 +86,11 @@
   {#if !inTauri()}
     <p class="empty">{t('tool.needApp')}</p>
   {:else}
+    <nav aria-label={t('nav.speed')}>
+      <button class="btn" class:primary={tab === 'standard'} aria-pressed={tab === 'standard'} onclick={() => (tab = 'standard')}>{t('speed.standard')}</button>
+      <button class="btn" class:primary={tab === 'deep'} aria-pressed={tab === 'deep'} onclick={() => (tab = 'deep')}>{t('tuning.deep')}</button>
+    </nav>
+    {#if tab === 'deep'}<Tuning area="deep" />{:else}
     <div class="cards">
       <div class="card">
         <div class="card-head">
@@ -153,6 +160,7 @@
       {/each}
     </ul>
     <p class="note"><Icon name="check" size={12} /> {t('speed.startupNote')}</p>
+    {/if}
   {/if}
 </section>
 
@@ -173,6 +181,8 @@
     margin: 0;
     color: var(--text-faint);
   }
+
+  nav { display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
 
   .cards {
     flex: none;

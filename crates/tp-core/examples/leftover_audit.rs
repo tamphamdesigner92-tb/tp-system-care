@@ -2,7 +2,7 @@
 use tp_core::tools::uninstall;
 
 fn main() {
-    let apps = uninstall::list();
+    let apps = uninstall::list().expect("liệt kê ứng dụng");
     for app in &apps {
         for l in uninstall::scan_leftovers(app, &apps) {
             if l.kind == "folder" {

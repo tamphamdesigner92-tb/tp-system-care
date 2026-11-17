@@ -16,7 +16,7 @@ fn main() {
     let items = startup::list();
     println!("Khởi động: {} mục ({} đang tắt)", items.len(), items.iter().filter(|i| !i.enabled).count());
 
-    let apps = uninstall::list();
+    let apps = uninstall::list().expect("liệt kê ứng dụng");
     println!("Ứng dụng đã cài: {}", apps.len());
     for app in apps.iter().take(5) {
         println!("  {} {} · {:?} · {:?}", app.name, app.version.as_deref().unwrap_or(""), app.install_date, app.install_location);

@@ -9,6 +9,7 @@ use tp_core::engine::{self, Finding, FixReport, ModuleId, ModuleResult, ScanEven
 use tp_core::rescue::{self, Record, Rescue, UndoReport};
 use tp_core::state::{self, Advice, Health, Store};
 
+mod maintenance;
 mod tools;
 
 /// Khoảng cách tối thiểu giữa hai sự kiện "đang quét tệp X" gửi lên giao diện.
@@ -158,7 +159,7 @@ fn health(state: State<'_, AppState>) -> Health {
 }
 
 #[tauri::command]
-fn rescue_history(state: State<'_, AppState>) -> Vec<Record> {
+fn rescue_history(state: State<'_, AppState>) -> Result<Vec<Record>, String> {
     state.rescue.history()
 }
 
@@ -175,8 +176,12 @@ async fn rescue_undo(state: State<'_, AppState>, id: u64) -> Result<UndoReport, 
 }
 
 #[tauri::command]
-async fn create_restore_point() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| rescue::create_restore_point("TP System Care"))
+async fn create_restore_point(state: State<'_, AppState>) -> Result<(), String> {
+    let guard = BusyGuard::acquire(&state.busy)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        rescue::create_restore_point("TP System Care")
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -191,6 +196,7 @@ pub fn run() {
             store: Arc::new(Store::default_location()),
         })
         .manage(tools::ToolState::default())
+        .manage(maintenance::MaintenanceState::default())
         .invoke_handler(tauri::generate_handler![
             is_elevated,
             scan,
@@ -209,12 +215,34 @@ pub fn run() {
             tools::startup_set,
             tools::apps_list,
             tools::app_uninstall,
+            tools::app_force_target,
+            tools::uninstall_prepare,
+            tools::apps_uninstall,
             tools::leftovers_scan,
             tools::leftovers_remove,
             tools::large_locations,
             tools::large_scan,
             tools::large_recycle,
-            tools::reveal
+            tools::reveal,
+            maintenance::maintenance_cancel,
+            maintenance::duplicate_scan,
+            maintenance::duplicate_recycle,
+            maintenance::duplicate_reveal,
+            maintenance::component_analyze,
+            maintenance::component_prepare,
+            maintenance::component_start,
+            maintenance::component_status,
+            maintenance::tuning_list,
+            maintenance::tuning_apply,
+            maintenance::browser_cache_scan,
+            maintenance::browser_cache_clear,
+            maintenance::browser_cache_reveal,
+            maintenance::browser_flush_dns,
+            maintenance::browser_network,
+            maintenance::monitor_list,
+            maintenance::monitor_begin,
+            maintenance::monitor_finish,
+            maintenance::monitor_detail
         ])
         .run(tauri::generate_context!())
         .expect("error while running TP System Care");

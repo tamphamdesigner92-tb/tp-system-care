@@ -543,7 +543,7 @@ mod tests {
         assert!(outside.exists(), "tệp ngoài root phải còn nguyên");
         assert!(root.exists(), "thư mục root phải còn");
         assert!(!root.join("sub").exists(), "thư mục con rỗng phải được dọn");
-        assert_eq!(rescue.history().len(), 1);
+        assert_eq!(rescue.history().unwrap().len(), 1);
         assert_eq!(report.undoable, 0);
         fs::remove_dir_all(base).unwrap();
     }
@@ -567,7 +567,7 @@ mod tests {
         let undo = rescue.undo(id).unwrap();
         assert_eq!((undo.restored, undo.failed), (1, 0));
         assert_eq!(fs::read(&file).unwrap(), b"lnk");
-        assert!(rescue.history()[0].undone);
+        assert!(rescue.history().unwrap()[0].undone);
         assert!(rescue.undo(id).is_err(), "không hoàn tác hai lần");
         fs::remove_dir_all(base).unwrap();
     }
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(report.done, 0);
         assert_eq!(report.failed, 1);
         assert!(report.record_id.is_none());
-        assert!(rescue.history().is_empty());
+        assert!(rescue.history().unwrap().is_empty());
         fs::remove_dir_all(base).unwrap();
     }
 }

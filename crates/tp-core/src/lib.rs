@@ -11,4 +11,4 @@ pub mod state;
 pub mod tools;
 mod winutil;
 
-pub use winutil::{is_elevated, reveal, unix_now};
+pub use winutil::{is_elevated, open_uri, reveal, unix_now};
