@@ -3,10 +3,15 @@
   import Uninstaller from '../lib/components/Uninstaller.svelte';
   import Tuning from '../lib/components/Tuning.svelte';
   import InstallMonitor from '../lib/components/InstallMonitor.svelte';
+  import BrowserExtensions from '../lib/components/BrowserExtensions.svelte';
+  import WindowsUpdates from '../lib/components/WindowsUpdates.svelte';
   import { t, type Key } from '../lib/i18n.svelte';
 
   /** Công cụ đang mở; `null` là lưới công cụ. */
   let { tool = $bindable(null) }: { tool: 'uninstaller' | 'browser' | 'monitor' | null } = $props();
+
+  /** Mục đang mở trong Gỡ cài đặt sạch. */
+  let section = $state<'apps' | 'extensions' | 'updates'>('apps');
 
   const upcoming: Key[] = [
     'toolbox.lock',
@@ -25,7 +30,14 @@
       <button class="link" onclick={() => (tool = null)}><Icon name="back" size={14} /> {t('nav.toolbox')}</button>
       <h1>{t('toolbox.uninstaller')}</h1>
     </header>
-    <Uninstaller />
+    <div class="tabs" role="tablist" aria-label={t('toolbox.uninstallerSections')}>
+      {#each ['apps', 'extensions', 'updates'] as const as s (s)}
+        <button role="tab" aria-selected={section === s} class:active={section === s} onclick={() => (section = s)}>
+          {t(`toolbox.section.${s}` as Key)}
+        </button>
+      {/each}
+    </div>
+    {#if section === 'apps'}<Uninstaller />{:else if section === 'extensions'}<BrowserExtensions />{:else}<WindowsUpdates />{/if}
   {:else if tool === 'browser' || tool === 'monitor'}
     <header>
       <button class="link" onclick={() => (tool = null)}><Icon name="back" size={14} /> {t('nav.toolbox')}</button>
@@ -87,6 +99,28 @@
     gap: 4px;
     font-size: 12px;
     color: var(--accent-2);
+  }
+
+  .tabs {
+    flex: none;
+    align-self: flex-start;
+    display: flex;
+    padding: 2px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+
+  .tabs button {
+    height: 28px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .tabs button.active {
+    background: var(--surface-active);
+    color: var(--text);
   }
 
   .grid {

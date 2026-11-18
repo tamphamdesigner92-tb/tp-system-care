@@ -7,6 +7,7 @@
   import { inTauri } from '../tauri';
   import {
     appsList,
+    whenIdle,
     appsUninstall,
     forceTarget,
     uninstallPrepare,
@@ -24,7 +25,7 @@
 
   type Step = 'list' | 'warning' | 'confirm' | 'prepare' | 'restore' | 'running' | 'results' | 'leftovers' | 'scanning' | 'removing' | 'done';
   type Sort = 'name' | 'size' | 'date';
-  type Filter = 'all' | 'desktop' | 'store' | 'builtIn';
+  type Filter = 'all' | 'desktop' | 'store' | 'builtIn' | 'companions';
   type WaitSession = { active: boolean; finished: boolean; stopRequested: boolean; cancelSent: boolean };
 
   let apps = $state<AppInfo[]>([]);
@@ -61,7 +62,7 @@
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
     const list = apps.filter((a) =>
-      (filter === 'all' || (filter === 'builtIn' ? a.builtIn : a.kind === filter)) &&
+      (filter === 'all' || (filter === 'builtIn' ? a.builtIn : filter === 'companions' ? a.companions.length > 0 : a.kind === filter)) &&
       (!q || a.name.toLowerCase().includes(q) || (a.publisher ?? '').toLowerCase().includes(q)),
     );
     const byName = (a: AppInfo, b: AppInfo) => a.name.localeCompare(b.name);
@@ -84,7 +85,7 @@
     loading = true;
     loadError = '';
     try {
-      const list = await appsList();
+      const list = await whenIdle(appsList, () => !destroyed && version === loadVersion);
       if (destroyed || version !== loadVersion) return;
       apps = list;
       selected = Object.fromEntries(list.filter((a) => a.removable && selected[a.id]).map((a) => [a.id, true]));
@@ -323,7 +324,7 @@
     <div class="toolbar">
       <input class="search" type="search" aria-label={t('uninstall.search')} placeholder={t('uninstall.search')} bind:value={query} disabled={busy} />
       <select aria-label={t('uninstall.filterLabel')} bind:value={filter} disabled={busy}>
-        {#each ['all', 'desktop', 'store', 'builtIn'] as const as f (f)}
+        {#each ['all', 'desktop', 'store', 'builtIn', 'companions'] as const as f (f)}
           <option value={f}>{t(`uninstall.filter.${f}` as Key)}</option>
         {/each}
       </select>
@@ -366,7 +367,9 @@
                 <span class="badge">{t(`uninstall.type.${a.kind}` as Key)}</span>
                 {#if a.builtIn}<span class="badge">{t('uninstall.builtIn')}</span>{/if}
                 {#if !a.removable}<span class="badge protected">{t('uninstall.protected')}</span>{/if}
+                {#if a.companions.length}<span class="badge protected" title={t('uninstall.companionsHint', { names: a.companions.join(', ') })}>{t('uninstall.companions')}</span>{/if}
               </span>
+              {#if a.companions.length}<span class="detail bad">{t('uninstall.companionsWith', { names: a.companions.join(', ') })}</span>{/if}
             </div>
             <span class="amount">{a.size ? formatBytes(a.size) : ''}</span>
             <button class="btn small" disabled={busy || !a.removable || (mode === 'forced' && a.kind === 'store')} title={!a.removable ? t('uninstall.protectedHint') : undefined} onclick={() => start([a])}>
@@ -413,6 +416,7 @@
         </div>
       {:else if step === 'confirm'}
         <p class="desc">{t(mode === 'forced' ? 'uninstall.forceConfirm' : 'uninstall.confirm')}</p>
+        {#if app?.companions.length}<p class="note">{t('uninstall.companionsHint', { names: app.companions.join(', ') })}</p>{/if}
         {#if targets.length > 1}
           <ul class="list queue">{#each targets as a (a.id)}<li><span class="name">{a.name}</span></li>{/each}</ul>
           <p class="note">{t('uninstall.batchHint')}</p>
@@ -520,7 +524,7 @@
   .sorts button { height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12px; color: var(--text-dim); }
   .sorts button.active { background: var(--surface-active); color: var(--text); }
   .list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0 6px 0 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-  .list li { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 6px 12px; border-radius: var(--radius); background: var(--surface); }
+  .list li { flex: none; display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 6px 12px; border-radius: var(--radius); background: var(--surface); }
   .list li.none { justify-content: center; color: var(--text-faint); font-size: 13px; }
   .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
   .name, .detail { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

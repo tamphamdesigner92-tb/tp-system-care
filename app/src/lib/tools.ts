@@ -62,6 +62,10 @@ export interface AppInfo {
   size: number | null;
   installLocation: string | null;
   needsAdmin: boolean;
+  /** Giây Unix, gần đúng thời điểm cài (lần ghi cuối của khóa Uninstall). */
+  installedAt: number | null;
+  /** Ứng dụng được cài trong cùng khoảng thời gian; có thể là phần mềm đi kèm. */
+  companions: string[];
 }
 
 export interface UninstallResult {
@@ -125,6 +129,62 @@ export async function appsUninstall(ids: string[], onProgress: (progress: Uninst
     unlisten();
   }
 }
+
+// ------------------------------------------------------------ Tiện ích trình duyệt
+
+export type ExtensionBrowser = 'chrome' | 'edge' | 'brave' | 'firefox';
+export type ExtensionSource = 'store' | 'unpacked' | 'external' | 'policy' | 'other';
+export type ExtensionRemovalKind = 'registry' | 'browser' | 'none';
+
+export interface BrowserExtension {
+  id: string;
+  browser: ExtensionBrowser;
+  profile: string | null;
+  extensionId: string;
+  name: string;
+  version: string | null;
+  source: ExtensionSource;
+  enabled: boolean | null;
+  removal: ExtensionRemovalKind;
+  registry: string[];
+  needsAdmin: boolean;
+}
+
+export interface ExtensionScan {
+  extensions: BrowserExtension[];
+  skipped: number;
+}
+
+export interface ExtensionRemoval {
+  done: number;
+  failed: number;
+  recordId: number | null;
+  errors: string[];
+}
+
+export const extensionsList = () => invoke<ExtensionScan>('extensions_list');
+export const extensionsRemove = (ids: string[]) => invoke<ExtensionRemoval>('extensions_remove', { ids });
+export const extensionManage = (id: string) => invoke<void>('extension_manage', { id });
+
+// ------------------------------------------------------------ Bản cập nhật Windows
+
+export interface WindowsUpdate {
+  id: string;
+  description: string | null;
+  installedOn: string | null;
+}
+
+export interface UpdateResult {
+  exitCode: number | null;
+  restartRequired: boolean;
+  stillInstalled: boolean;
+}
+
+export const updatesList = () => invoke<WindowsUpdate[]>('updates_list');
+export const updatePrepare = (id: string, continueWithoutRestore = false) =>
+  invoke<UninstallPreparation>('update_prepare', { id, continueWithoutRestore });
+export const updateUninstall = (id: string) => invoke<UpdateResult>('update_uninstall', { id });
+export const updatesHistory = () => invoke<void>('updates_history');
 
 // ------------------------------------------------------------ Tệp lớn
 
@@ -319,3 +379,18 @@ export const monitorBegin = (name: string, root: string, vendor: string, request
 export const monitorFinish = (id: number, requestId: string, progress: (path: string, count: number) => void) =>
   maintenanceWork<MonitorReport>('monitor_finish', { id }, requestId, progress);
 export const monitorDetail = (id: number) => invoke<MonitorReport>('monitor_detail', { id });
+
+/**
+ * Chạy một lệnh chỉ-đọc, thử lại khi backend đang bận với tác vụ khác (ví dụ danh
+ * sách của tab vừa rời còn đang tải). `alive` trả false thì ngừng thử.
+ */
+export async function whenIdle<T>(work: () => Promise<T>, alive: () => boolean, attempts = 40): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await work();
+    } catch (e) {
+      if (String(e) !== 'busy' || i >= attempts || !alive()) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}

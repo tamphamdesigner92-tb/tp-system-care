@@ -2,7 +2,7 @@
 
 Ứng dụng chăm sóc và tối ưu Windows, phong cách giao diện tương tự Advanced SystemCare (nền tối, thanh bên trái, nút Quét tròn lớn, công tắc Chế độ AI / Thủ công) nhưng dùng tên, logo, icon và nội dung riêng.
 
-_Cập nhật lần cuối: 18/11/2026_
+_Cập nhật lần cuối: 19/11/2026_
 
 ## Tóm tắt tiến độ
 
@@ -30,7 +30,7 @@ Tổng ước lượng: 7–10 tháng cho một người làm toàn thời gian,
 
 | Thành phần | Vai trò | Thư viện chính | Trạng thái |
 |---|---|---|---|
-| `crates/tp-core` | Engine quét/sửa, Rescue Center, công cụ hệ thống | `windows`, `winreg`, `walkdir` (sau này thêm `wmi`, `sysinfo`) | Có engine, Rescue Center, 10 module, luật Chế độ AI, điểm sức khỏe; công cụ Tăng tốc, Gỡ sạch và Tìm tệp lớn |
+| `crates/tp-core` | Engine quét/sửa, Rescue Center, công cụ hệ thống | `windows`, `winreg`, `walkdir` (sau này thêm `wmi`, `sysinfo`) | Có engine, Rescue Center, 10 module, luật Chế độ AI, điểm sức khỏe; công cụ Tăng tốc, Gỡ sạch (gồm tiện ích trình duyệt và bản cập nhật Windows) và Tìm tệp lớn |
 | `app/src-tauri` | Ứng dụng Tauri: cửa sổ, lệnh gọi từ giao diện, tray | `tauri` 2 | Đã tạo |
 | `app/src` | Giao diện Svelte | `svelte` 5, `@tauri-apps/api` | Đã tạo |
 | `crates/tp-service` | Windows Service quyền admin, lịch tự động, giao tiếp qua named pipe | `windows-service` | Chưa tạo (giai đoạn 6) |
@@ -254,10 +254,18 @@ Còn tồn đọng:
 - [x] WinSxS: phân tích và dọn bằng DISM cố định `/English`, `/StartComponentCleanup /NoRestart`; phân tích phải mới và có khuyến nghị, xác nhận/điểm khôi phục trước khi chạy. Lỗi khôi phục chỉ cho bỏ qua sau thất bại và xác nhận riêng. Giữ busy đến khi servicing thật kết thúc, ghi lịch sử trước khi chạy, không `/ResetBase`, không kill/timeout cleanup, báo khởi động lại với 3010.
 - [x] Tối ưu sâu ban đầu và trình duyệt: 7 thiết lập HKCU cố định, sao lưu/kiểm tra lại trước ghi, chặn chính sách trình duyệt HKLM. Chỉ quét Cache/Code Cache/GPUCache/cache2 của Chrome/Edge/Brave/Firefox; không đụng cookie, mật khẩu, lịch sử hay tiện ích, không kill trình duyệt. DNS dùng ipconfig cố định, mở thiết lập mạng Windows; không tự sửa mạng/chính sách bảo mật.
 - [x] Install Monitor: phạm vi thư mục riêng chính xác và registry cố định, trước/sau có giới hạn và lịch sử. Native liệt kê thư mục theo handle, đối chiếu identity/đường dẫn thật, không theo junction khi thư mục đổi; bỏ qua chênh lệch không chắc chắn. ID mili giây tăng dần trong miền số nguyên an toàn JavaScript; tên tối đa 128 byte UTF-8, vendor riêng tối đa 64 ký tự ASCII; chặn gốc dùng chung như `C:\\Tools`. Không tự chạy trình cài, suy đoán sở hữu hay xóa tàn dư.
+- [x] Gỡ sạch đợt 3 (19/11/2026): Hộp công cụ → Gỡ cài đặt sạch có ba tab Ứng dụng / Tiện ích trình duyệt / Bản cập nhật Windows.
+- [x] Tiện ích trình duyệt (`tools/browser_extensions.rs`): đọc chỉ-đọc `Secure Preferences`/`Preferences` của Chrome/Edge/Brave (hồ sơ `Default`, `Profile N`) và `extensions.json` của Firefox; bỏ thành phần của trình duyệt, dịch tên `__MSG_…__`, nhận nguồn cửa hàng/thư mục/phần mềm khác/chính sách. Tiện ích cài qua registry (`…\Chrome\Extensions`, `…\Edge\Extensions`, `Mozilla\Firefox\Extensions`) được xuất `.reg`/lưu giá trị rồi xóa, kiểm tra lại ngay trước khi xóa, hoàn tác ở Rescue Center; trình duyệt tự gỡ ở lần mở sau. Tiện ích người dùng tự cài chỉ mở đúng trang quản lý tiện ích của trình duyệt (`--profile-directory`, `chrome://extensions/?id=`), không sửa tệp cấu hình đã ký. Tiện ích do chính sách bắt buộc chỉ liệt kê. Không chọn sẵn mục nào; một mục registry áp dụng cho mọi hồ sơ.
+- [x] Gỡ bản cập nhật Windows (`tools/windows_updates.rs`): liệt kê bằng `Get-HotFix`, chỉ nhận mã `KB` + 6–8 chữ số; gỡ bằng `wusa.exe /uninstall /kb:… /norestart` (đường dẫn cố định, không `/quiet`, hộp xác nhận của Windows), qua bước điểm khôi phục giống Gỡ sạch (bỏ qua chỉ sau thất bại và xác nhận riêng, phiên dùng một lần, gắn đúng mã KB). Ngừng chờ không dừng `wusa`. Diễn giải mã 3010/1641, 2359303, 1223 và mã lỗi; lỗi thì dẫn sang trang lịch sử Windows Update.
+- [x] Phát hiện phần mềm đi kèm: lấy thời điểm ghi cuối của khóa Uninstall; ứng dụng desktop cùng ngày cài và cách nhau tối đa 5 phút được đánh dấu "Cài cùng lúc" kèm tên ứng dụng kia, có bộ lọc riêng. Bỏ runtime (Redistributable, .NET, DirectX, WebView2…) và nhóm từ 6 ứng dụng trở lên (cài hàng loạt). Chỉ cảnh báo, không chọn sẵn hay tự gỡ.
+- [x] Danh sách Gỡ sạch/tiện ích/bản cập nhật tự thử lại khi backend đang bận với danh sách của tab vừa rời; sửa lỗi dòng danh sách bị ép thấp khi tràn.
 - [x] Rescue journal: chỉ coi NotFound là lịch sử chưa tồn tại, báo lỗi dữ liệu hỏng/không đọc được; tạo scratch riêng bằng create_new, chặn hardlink/reparse, sync trước khi xuất bản bằng rename write-through trên Windows. Gia cố đường dẫn không giải quyết tính xác thực payload phục hồi còn tồn đọng bên dưới.
 
 Đã kiểm tra:
 
+- Gỡ sạch đợt 3, 19/11/2026: `cargo test -p tp-core -- --include-ignored` đạt 196 test (thêm 12: đọc hồ sơ Chromium/Firefox giả, tệp tùy chọn hỏng báo lỗi chứ không ẩn, gắn registry/chính sách, xóa registry tiện ích trên khóa HKCU thử rồi hoàn tác và từ chối mục đã đổi, tham số mở trình duyệt, phân tích `Get-HotFix`, nhận diện cài cùng lúc, đổi ngày giờ registry); 8 test Tauri đạt (thêm ràng buộc phiên gỡ bản cập nhật). `cargo check --workspace --all-targets` không cảnh báo; `npm run check` 0 lỗi/0 cảnh báo; `npm run build` đạt; 524 khóa Việt/Anh khớp.
+- Chạy chỉ-đọc trên máy phát triển (`cargo run -p tp-core --example tools`): 80 tiện ích trên Chrome/Edge trong 0,45 giây, nhận đúng tiện ích Adobe Acrobat và Bing do phần mềm khác cài qua registry; 47 bản cập nhật trong 1,1 giây; 8 nhóm cài cùng lúc (ví dụ NVIDIA App với driver, Epic Games Launcher với Epic Online Services).
+- Giao diện với backend giả: ba tab, bộ lọc "Cài cùng lúc", chọn một mục registry chọn theo mọi hồ sơ, xem trước đường dẫn registry, lỗi thiếu quyền HKLM từng mục, mở trang tiện ích; gỡ bản cập nhật qua điểm khôi phục thất bại → xác nhận → cần khởi động lại, mã lỗi 0x80070057 kèm lối sang lịch sử Windows Update, ngừng chờ; bản ghi Rescue Center. Không lỗi console.
 - Đợt mới 18/11/2026: `npm run check` 0 lỗi/0 cảnh báo, `npm run build` đạt, 457 khóa Việt/Anh khớp. Đã tương tác DOM với backend giả cho năm công cụ: giữ một bản tệp trùng, xóa một phần/hủy; WinSxS xác nhận và khôi phục thất bại trước khi cho bỏ qua, busy qua đổi trang, lỗi và mã 3010; tinh chỉnh rồi hoàn tác; cache bị chặn khi trình duyệt chạy, DNS cần xác nhận; Monitor giữ baseline khi hủy/rời trang, thử lại, báo cáo chưa đầy đủ. Kiểm tra hồi quy Tệp lớn/Turbo/RAM/Gỡ sạch/Chăm sóc và xử lý lỗi đọc lịch sử không báo rỗng giả, không có lỗi console ứng dụng. Timer fixture được tăng tốc vì trình duyệt nhúng đang ẩn; không phải phép đo hiệu năng.
 - Đợt mới 18/11/2026: `cargo test -p tp-core -- --include-ignored` đạt 184 test, 0 lỗi/0 ignored; 6 test Tauri đạt. `cargo check --workspace --all-targets`, `cargo build -p tp-system-care`, rustfmt cho module mới và `git diff --check` đều đạt, không cảnh báo Rust. Đã sửa fixture TEMP tên 8.3 bằng chuẩn hóa đường dẫn fixture, không nới luật đường dẫn thật; thêm test luồng NTFS phụ, nguồn được tạo lại, flush/khôi phục thất bại và native Monitor junction/retarget/rename/giới hạn lô. Có 5 trường hợp fixture staging cần elevation chưa thực thi trong phiên không quản trị; số test đạt không chứng minh các nhánh quyền quản trị/DACL đã chạy. Fixture không quản trị đã dùng đúng quyền/share của staging để xác nhận handle transfer không tự bị khóa, giữ ánh xạ gốc/định danh/vị trí sau chuyển và phát hiện ADS phát sinh muộn mà vẫn giữ dữ liệu.
 - Mock bổ sung: Monitor dùng ID cỡ mili giây qua finish/detail không mất chính xác, hiển thị ngày năm 2026; từ chối gốc Tools, tên vượt 128 byte UTF-8 và vendor ngoài 64 ASCII/tên riêng. Lỗi recycle còn dữ liệu lưu giữ được hiển thị đầy đủ ở công cụ và Rescue, không có nút hoàn tác giả. Recycle thành công giữ ánh xạ gốc/Bin và cảnh báo giới hạn Khôi phục của Windows, không báo lỗi giả cho bản ghi thành công. Không lỗi console ứng dụng.
@@ -268,11 +276,13 @@ Còn tồn đọng:
 
 Còn tồn đọng:
 
-- [ ] Tối ưu sâu ngoài nhóm HKCU ban đầu, lần dùng gần nhất và bộ lọc nâng cao ngoài Desktop/Store/Có sẵn.
+- [ ] Tối ưu sâu ngoài nhóm HKCU ban đầu, lần dùng gần nhất của ứng dụng.
 - [ ] Service đang chạy, driver, service dùng chung/phụ thuộc/cấu hình nâng cao; task cần mật khẩu, action dùng runner chung; service/task có auditing tùy chỉnh hoặc không xác minh được vẫn bị loại khỏi quét tàn dư để bảo vệ hệ thống.
 - [ ] Store chưa gỡ gói cấp sẵn hoặc gói của tài khoản khác; chưa đo tốc độ liệt kê/quét tàn dư mở rộng trên bản release.
 - [ ] Hoàn tác task có thể làm task chạy theo lịch gốc; không kích hoạt registration trigger khi tái tạo. Xóa tàn dư không có nút hủy giữa một thao tác service/task đang chạy; từng lệnh giới hạn thời gian, kết quả không chắc chắn vẫn giữ bản phục hồi.
-- [ ] Tiện ích/toolbar trình duyệt, bản cập nhật Windows và phần mềm đi kèm.
+- [ ] Tiện ích trình duyệt: chưa gỡ trực tiếp tiện ích người dùng tự cài (phải gỡ trong trình duyệt), chưa đọc registry tiện ích ngoài của Brave, chưa xử lý tiện ích cài bằng tệp JSON trong thư mục `External Extensions`. Chưa thử gỡ thật để xác nhận trình duyệt tự gỡ tiện ích sau khi mất mục registry.
+- [ ] Bản cập nhật Windows: chưa thử `wusa` thật (cần quyền quản trị và máy ảo); bản tích lũy gộp servicing stack chưa gỡ được bằng DISM `/Remove-Package`, chỉ dẫn sang trang Windows. Gỡ bản cập nhật không hoàn tác ở Rescue Center, chỉ dựa vào điểm khôi phục.
+- [ ] Phần mềm đi kèm chỉ dựa vào thời điểm ghi khóa Uninstall: bản cập nhật ứng dụng cũng đổi thời điểm này nên có thể báo nhầm; chưa đối chiếu với nhật ký Install Monitor.
 - [ ] Dọn theo ứng dụng, tiện ích nặng và chính sách mạng chi tiết chưa triển khai; tối ưu sâu hiện chỉ nhóm HKCU ban đầu.
 - [ ] Chưa thử thao tác thật qua cửa sổ Tauri: Turbo, giải phóng RAM, bật/tắt khởi động, tạo điểm khôi phục, gỡ desktop/Store/hàng loạt/cưỡng bức, Ngừng chờ trình gỡ thật, xóa/hoàn tác service/task/lối tắt/registry, WinSxS, tinh chỉnh HKCU/cache/DNS và Monitor với trình cài thật. Chưa xác minh staging/DACL bằng phiên quản trị hoặc tương thích recycle của shell thật; mới kiểm tra fixture/primitives trên tệp tạm riêng, liệt kê chỉ-đọc và giao diện giả. Cần máy ảo thử nghiệm trước khi dùng trên hệ thống thật.
 - [ ] Chưa kiểm tra trực quan bố cục bằng ảnh chụp: trình duyệt nhúng đang ẩn nên công cụ screenshot không có bề mặt hiển thị; đã kiểm tra tương tác và cấu trúc DOM.

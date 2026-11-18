@@ -55,6 +55,11 @@ pub struct AppInfo {
     pub size: Option<u64>,
     pub install_location: Option<String>,
     pub needs_admin: bool,
+    /// Lần ghi cuối của khóa Uninstall (giây Unix), gần đúng thời điểm cài.
+    pub installed_at: Option<u64>,
+    /// Ứng dụng khác được đăng ký trong cùng khoảng thời gian: có thể là phần mềm
+    /// đi kèm bộ cài. Chỉ là cảnh báo, không bao giờ tự chọn để gỡ.
+    pub companions: Vec<String>,
     #[serde(skip)]
     pub machine: bool,
     #[serde(skip)]
@@ -114,6 +119,8 @@ fn read_app(machine: bool, root: &str, sub: &str) -> Option<AppInfo> {
         size: number(&values, "EstimatedSize").map(|kb| kb as u64 * 1024),
         install_location: text(&values, "InstallLocation").map(|p| p.trim_matches('"').to_string()),
         needs_admin: machine,
+        installed_at: reg::last_write(machine, &key),
+        companions: Vec::new(),
         machine,
         key,
         uninstall,
@@ -140,7 +147,45 @@ pub fn desktop_list() -> Vec<AppInfo> {
         }
     }
     apps.sort_by_key(|a| a.name.to_lowercase());
+    mark_companions(&mut apps);
     apps
+}
+
+/// Hai ứng dụng được coi là cài cùng lúc khi cùng ngày cài và khóa Uninstall được
+/// ghi cách nhau không quá 5 phút.
+const COMPANION_WINDOW: u64 = 5 * 60;
+/// Nhóm lớn hơn thường là cài đặt hàng loạt của nhà sản xuất máy hoặc công ty.
+const COMPANION_LIMIT: usize = 6;
+/// Thư viện chạy kèm (runtime) thường là phụ thuộc thật của ứng dụng chính.
+const RUNTIME_HINTS: &[&str] = &["redistributable", "runtime", ".net", "visual c++", "directx", "webview2", "vc_redist"];
+
+fn runtime(app: &AppInfo) -> bool {
+    let name = app.name.to_lowercase();
+    RUNTIME_HINTS.iter().any(|hint| name.contains(hint))
+}
+
+/// Ghi tên các ứng dụng desktop được cài trong cùng khoảng thời gian.
+fn mark_companions(apps: &mut [AppInfo]) {
+    let candidates: Vec<(usize, u64, String)> = apps
+        .iter()
+        .enumerate()
+        .filter(|(_, app)| app.kind == AppKind::Desktop && !runtime(app))
+        .filter_map(|(index, app)| Some((index, app.installed_at?, app.install_date.clone()?)))
+        .collect();
+    let mut found: Vec<(usize, Vec<String>)> = Vec::new();
+    for (index, time, date) in &candidates {
+        let names: Vec<String> = candidates
+            .iter()
+            .filter(|(other, other_time, other_date)| other != index && other_date == date && other_time.abs_diff(*time) <= COMPANION_WINDOW)
+            .map(|(other, _, _)| apps[*other].name.clone())
+            .collect();
+        if !names.is_empty() && names.len() < COMPANION_LIMIT {
+            found.push((*index, names));
+        }
+    }
+    for (index, names) in found {
+        apps[index].companions = names;
+    }
 }
 
 pub fn list() -> Result<Vec<AppInfo>, String> {
@@ -158,6 +203,8 @@ pub fn list() -> Result<Vec<AppInfo>, String> {
             size: None,
             install_location: package.install_location.clone(),
             needs_admin: false,
+            installed_at: None,
+            companions: Vec::new(),
             machine: false,
             key: String::new(),
             uninstall: String::new(),
@@ -382,6 +429,8 @@ pub fn force_target(name: &str, path: &str, installed: &[AppInfo]) -> Result<App
         size: None,
         install_location: Some(location),
         needs_admin: false,
+        installed_at: None,
+        companions: Vec::new(),
         machine: false,
         key: String::new(),
         uninstall: String::new(),
@@ -1031,6 +1080,8 @@ mod tests {
             size: None,
             install_location: Some(location.into()),
             needs_admin: true,
+            installed_at: None,
+            companions: Vec::new(),
             machine: true,
             key: format!("SOFTWARE\\Test\\{id}"),
             uninstall: format!("\"{location}\\uninst.exe\""),
@@ -1038,6 +1089,36 @@ mod tests {
             package: None,
             synthetic: false,
         }
+    }
+
+    #[test]
+    fn companions_need_same_day_close_time_and_skip_runtimes_and_mass_installs() {
+        let at = |id: &str, name: &str, date: &str, time: u64| {
+            let mut a = app(id, name, "Vendor", r"C:\Fixture");
+            a.install_date = Some(date.into());
+            a.installed_at = Some(time);
+            a
+        };
+        let mut apps = vec![
+            at("main", "Free Player", "2026-11-18", 1_000),
+            at("bar", "Search Bar", "2026-11-18", 1_120),
+            at("vc", "Microsoft Visual C++ 2015-2022 Redistributable", "2026-11-18", 1_060),
+            at("late", "Later Tool", "2026-11-18", 1_000 + COMPANION_WINDOW + 200),
+            at("other", "Other Day", "2026-11-19", 1_010),
+        ];
+        let mut store = app("store", "Store App", "Vendor", r"C:\Store");
+        store.kind = AppKind::Store;
+        store.install_date = Some("2026-11-18".into());
+        store.installed_at = Some(1_000);
+        apps.push(store);
+        mark_companions(&mut apps);
+        assert_eq!(apps[0].companions, ["Search Bar"]);
+        assert_eq!(apps[1].companions, ["Free Player"]);
+        assert!(apps[2].companions.is_empty() && apps[3].companions.is_empty() && apps[4].companions.is_empty() && apps[5].companions.is_empty());
+
+        let mut mass: Vec<AppInfo> = (0..=COMPANION_LIMIT as u64).map(|i| at(&format!("m{i}"), &format!("Preload {i}"), "2026-11-18", 5_000 + i)).collect();
+        mark_companions(&mut mass);
+        assert!(mass.iter().all(|a| a.companions.is_empty()));
     }
 
     #[test]

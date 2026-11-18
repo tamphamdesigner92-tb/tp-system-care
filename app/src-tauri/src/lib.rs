@@ -9,6 +9,7 @@ use tp_core::engine::{self, Finding, FixReport, ModuleId, ModuleResult, ScanEven
 use tp_core::rescue::{self, Record, Rescue, UndoReport};
 use tp_core::state::{self, Advice, Health, Store};
 
+mod extras;
 mod maintenance;
 mod tools;
 
@@ -197,6 +198,7 @@ pub fn run() {
         })
         .manage(tools::ToolState::default())
         .manage(maintenance::MaintenanceState::default())
+        .manage(extras::ExtrasState::default())
         .invoke_handler(tauri::generate_handler![
             is_elevated,
             scan,
@@ -242,7 +244,14 @@ pub fn run() {
             maintenance::monitor_list,
             maintenance::monitor_begin,
             maintenance::monitor_finish,
-            maintenance::monitor_detail
+            maintenance::monitor_detail,
+            extras::extensions_list,
+            extras::extensions_remove,
+            extras::extension_manage,
+            extras::updates_list,
+            extras::update_prepare,
+            extras::update_uninstall,
+            extras::updates_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running TP System Care");

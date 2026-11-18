@@ -13,6 +13,7 @@
 
   function describe(record: RescueRecord): string {
     if (record.title?.startsWith('uninstall:')) return t('rescue.uninstall', { name: record.title.slice(10) });
+    if (record.title?.startsWith('windowsUpdate:')) return t('rescue.windowsUpdate', { id: record.title.slice(14) });
     if (record.title) {
       const title = /^(duplicateFiles|browserCache); /.test(record.title) ? record.title.split('; ', 1)[0] : record.title;
       return tOr(`rescue.${title}`, title);

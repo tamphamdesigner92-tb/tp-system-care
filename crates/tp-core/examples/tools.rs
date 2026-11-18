@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use tp_core::modules::startup;
-use tp_core::tools::{largefiles, speed, uninstall};
+use tp_core::tools::{browser_extensions, largefiles, speed, uninstall, windows_updates};
 
 fn main() {
     let m = speed::memory();
@@ -27,6 +27,32 @@ fn main() {
         for l in leftovers {
             println!("  [{}] {:<14} {:>8.1} MB {}", if l.recommended { "x" } else { " " }, l.kind, l.bytes as f64 / 1_048_576.0, l.path);
         }
+    }
+
+    for app in apps.iter().filter(|a| !a.companions.is_empty()) {
+        println!("Cài cùng lúc: {} ↔ {}", app.name, app.companions.join(", "));
+    }
+
+    let started = std::time::Instant::now();
+    match browser_extensions::list() {
+        Ok(scan) => {
+            println!("Tiện ích trình duyệt: {} ({} hồ sơ không đọc được, {:.1?})", scan.extensions.len(), scan.skipped, started.elapsed());
+            for e in &scan.extensions {
+                println!("  {:<8} {:<22} {:?}/{:?} {:?} {}", e.browser, e.profile.as_deref().unwrap_or("-"), e.source, e.removal, e.enabled, e.name);
+            }
+        }
+        Err(e) => println!("Tiện ích trình duyệt: lỗi {e}"),
+    }
+
+    let started = std::time::Instant::now();
+    match windows_updates::list() {
+        Ok(updates) => {
+            println!("Bản cập nhật Windows: {} ({:.1?})", updates.len(), started.elapsed());
+            for u in updates.iter().take(5) {
+                println!("  {} {:?} {:?}", u.id, u.description, u.installed_on);
+            }
+        }
+        Err(e) => println!("Bản cập nhật Windows: lỗi {e}"),
     }
 
     let started = std::time::Instant::now();
