@@ -29,6 +29,13 @@ fn main() {
         }
     }
 
+    let now = tp_core::unix_now();
+    let mut used: Vec<_> = apps.iter().filter_map(|a| Some((a.last_used?, a))).collect();
+    used.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    println!("Có lần mở (UserAssist): {}/{} ứng dụng", used.len(), apps.len());
+    for (t, app) in used.iter().take(5).chain(used.iter().rev().take(3)) {
+        println!("  {:>5} ngày trước  {}", (now - t) / 86_400, app.name);
+    }
     for app in apps.iter().filter(|a| !a.companions.is_empty()) {
         println!("Cài cùng lúc: {} ↔ {}", app.name, app.companions.join(", "));
     }

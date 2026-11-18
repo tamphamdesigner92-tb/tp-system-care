@@ -77,6 +77,14 @@ const startupItems = [
   { id: 'hklmRun|Tablet', name: 'Tablet Driver', command: 'C:\\Program Files\\Tablet\\Tablet.exe', location: 'hklmRun', enabled: true, broken: false, needsAdmin: true },
   { id: 'userFolder|Capture.lnk', name: 'Capture.lnk', command: 'C:\\Users\\demo\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Capture.lnk', location: 'userFolder', enabled: false, broken: false, needsAdmin: false },
 ];
+// Lần mở giả theo UserAssist: 7-Zip vừa dùng, Old Game lâu không mở, Chat App không có ghi nhận.
+const MOCK_NOW = Math.floor(Date.now() / 1000);
+const MOCK_LAST_USED: Record<string, number> = {
+  'HKLM\\a': MOCK_NOW - 3600,
+  'HKLM\\b': MOCK_NOW - 400 * 86_400,
+  'HKLM\\d': MOCK_NOW - 2 * 86_400,
+  'store|SpotifyAB.SpotifyMusic_zpdnekdrzrea0': MOCK_NOW - 5 * 86_400,
+};
 const apps: AppInfo[] = [
   { id: 'HKLM\\a', kind: 'desktop', builtIn: false, removable: true, name: '7-Zip 23.01 (x64)', publisher: 'Igor Pavlov', version: '23.01', installDate: '2026-03-02', size: 5.6e6, installLocation: 'C:\\Program Files\\7-Zip', needsAdmin: true },
   // Deterministic failure cases exercise queue stopping and no forced fallback.
@@ -87,7 +95,7 @@ const apps: AppInfo[] = [
   { id: 'store|Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy', kind: 'store', builtIn: true, removable: false, name: 'Windows Shell Experience Host', publisher: 'Microsoft Corporation', version: '10.0.19041.1', installDate: null, size: null, installLocation: 'C:\\Windows\\SystemApps\\ShellExperienceHost', needsAdmin: false },
   { id: 'HKLM\\d', kind: 'desktop', builtIn: false, removable: true, name: 'Free Video Player', publisher: 'Player Labs', version: '3.4', installDate: '2026-11-15', size: 88e6, installLocation: 'C:\\Program Files\\Free Video Player', needsAdmin: true, installedAt: 1_794_738_000, companions: ['Search Toolbar Helper'] },
   { id: 'HKLM\\e', kind: 'desktop', builtIn: false, removable: true, name: 'Search Toolbar Helper', publisher: 'Deal Search Ltd.', version: '1.0.7', installDate: '2026-11-15', size: 4.1e6, installLocation: 'C:\\Program Files (x86)\\Search Toolbar Helper', needsAdmin: true, installedAt: 1_794_738_090, companions: ['Free Video Player'] },
-].map((app) => ({ installedAt: null, companions: [], ...app }) as AppInfo);
+].map((app) => ({ installedAt: null, companions: [], lastUsed: MOCK_LAST_USED[app.id] ?? null, ...app }) as AppInfo);
 // This set models only the current user's installed apps; other users/provisioning are untouched.
 const installedApps = new Set(apps.map((app) => app.id));
 const forceTargets = new Map<string, AppInfo>();
@@ -190,7 +198,7 @@ function makeForceTarget(name: string, inputPath: string): AppInfo {
     return lower === other || lower.startsWith(`${other}\\`) || other.startsWith(`${lower}\\`);
   })) throw 'shared_force_target';
   const id = `force|${lower}`;
-  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, installLocation: path, needsAdmin: false, installedAt: null, companions: [] };
+  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, installLocation: path, needsAdmin: false, installedAt: null, companions: [], lastUsed: null };
   forceTargets.set(id, target);
   return { ...target };
 }

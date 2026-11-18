@@ -1,6 +1,7 @@
 <script lang="ts">
   import Sidebar from './lib/components/Sidebar.svelte';
   import TitleBar from './lib/components/TitleBar.svelte';
+  import UpdateBanner from './lib/components/UpdateBanner.svelte';
   import { pages, type PageId } from './lib/pages';
   import { isElevated } from './lib/tauri';
   import Care from './pages/Care.svelte';
@@ -31,6 +32,7 @@
   <Sidebar current={view === 'rescue' ? null : view} {elevated} onselect={select} />
   <main>
     <TitleBar rescueOpen={view === 'rescue'} onrescue={() => (view = view === 'rescue' ? 'care' : 'rescue')} />
+    <UpdateBanner />
     <!-- Trang Chăm sóc luôn được giữ lại để lần quét đang chạy không mất khi chuyển trang. -->
     <div class="keep" class:off={view !== 'care'}>
       <Care {elevated} onrescue={() => (view = 'rescue')} />

@@ -60,6 +60,9 @@ pub struct AppInfo {
     /// Ứng dụng khác được đăng ký trong cùng khoảng thời gian: có thể là phần mềm
     /// đi kèm bộ cài. Chỉ là cảnh báo, không bao giờ tự chọn để gỡ.
     pub companions: Vec<String>,
+    /// Lần mở gần nhất theo UserAssist (giây Unix); `None` là không thấy ghi nhận,
+    /// không có nghĩa là chưa từng dùng.
+    pub last_used: Option<u64>,
     #[serde(skip)]
     pub machine: bool,
     #[serde(skip)]
@@ -121,6 +124,7 @@ fn read_app(machine: bool, root: &str, sub: &str) -> Option<AppInfo> {
         needs_admin: machine,
         installed_at: reg::last_write(machine, &key),
         companions: Vec::new(),
+        last_used: None,
         machine,
         key,
         uninstall,
@@ -205,6 +209,7 @@ pub fn list() -> Result<Vec<AppInfo>, String> {
             needs_admin: false,
             installed_at: None,
             companions: Vec::new(),
+            last_used: None,
             machine: false,
             key: String::new(),
             uninstall: String::new(),
@@ -214,6 +219,7 @@ pub fn list() -> Result<Vec<AppInfo>, String> {
         });
     }
     apps.sort_by_key(|app| app.name.to_lowercase());
+    super::app_usage::assign(&mut apps, &super::app_usage::entries());
     Ok(apps)
 }
 
@@ -431,6 +437,7 @@ pub fn force_target(name: &str, path: &str, installed: &[AppInfo]) -> Result<App
         needs_admin: false,
         installed_at: None,
         companions: Vec::new(),
+        last_used: None,
         machine: false,
         key: String::new(),
         uninstall: String::new(),
@@ -1082,6 +1089,7 @@ mod tests {
             needs_admin: true,
             installed_at: None,
             companions: Vec::new(),
+            last_used: None,
             machine: true,
             key: format!("SOFTWARE\\Test\\{id}"),
             uninstall: format!("\"{location}\\uninst.exe\""),

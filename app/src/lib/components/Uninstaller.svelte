@@ -24,8 +24,12 @@
   } from '../tools';
 
   type Step = 'list' | 'warning' | 'confirm' | 'prepare' | 'restore' | 'running' | 'results' | 'leftovers' | 'scanning' | 'removing' | 'done';
-  type Sort = 'name' | 'size' | 'date';
-  type Filter = 'all' | 'desktop' | 'store' | 'builtIn' | 'companions';
+  type Sort = 'name' | 'size' | 'date' | 'used';
+  type Filter = 'all' | 'desktop' | 'store' | 'builtIn' | 'companions' | 'large' | 'stale' | 'recent';
+  const DAY = 86_400;
+  const LARGE = 1024 ** 3;
+  const STALE_DAYS = 90;
+  const RECENT_DAYS = 30;
   type WaitSession = { active: boolean; finished: boolean; stopRequested: boolean; cancelSent: boolean };
 
   let apps = $state<AppInfo[]>([]);
@@ -61,19 +65,46 @@
   const busy = $derived(creatingTarget || ['prepare', 'running', 'scanning', 'removing'].includes(step));
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    const list = apps.filter((a) =>
-      (filter === 'all' || (filter === 'builtIn' ? a.builtIn : filter === 'companions' ? a.companions.length > 0 : a.kind === filter)) &&
+    const list = apps.filter((a) => matches(a, filter) &&
       (!q || a.name.toLowerCase().includes(q) || (a.publisher ?? '').toLowerCase().includes(q)),
     );
     const byName = (a: AppInfo, b: AppInfo) => a.name.localeCompare(b.name);
     if (sort === 'size') return [...list].sort((a, b) => (b.size ?? 0) - (a.size ?? 0) || byName(a, b));
     if (sort === 'date') return [...list].sort((a, b) => (b.installDate ?? '').localeCompare(a.installDate ?? '') || byName(a, b));
+    // Lâu không mở lên trước; ứng dụng không có ghi nhận xếp cuối.
+    if (sort === 'used') return [...list].sort((a, b) => (a.lastUsed ?? Infinity) - (b.lastUsed ?? Infinity) || byName(a, b));
     return [...list].sort(byName);
   });
   const selectable = $derived(shown.filter((a) => a.removable));
   const allSelected = $derived(selectable.length > 0 && selectable.every((a) => selected[a.id]));
   const selectedApps = $derived(apps.filter((a) => a.removable && selected[a.id]));
   const chosen = $derived(leftovers.filter((l) => picked[l.id]));
+
+  const now = Math.floor(Date.now() / 1000);
+  const daysAgo = (unix: number) => Math.max(0, Math.floor((now - unix) / DAY));
+  const installedDaysAgo = (date: string | null) => {
+    const time = date ? Date.parse(`${date}T00:00:00`) : NaN;
+    return Number.isNaN(time) ? null : daysAgo(Math.floor(time / 1000));
+  };
+
+  function matches(a: AppInfo, f: Filter): boolean {
+    switch (f) {
+      case 'all': return true;
+      case 'builtIn': return a.builtIn;
+      case 'companions': return a.companions.length > 0;
+      case 'large': return (a.size ?? 0) >= LARGE;
+      // Chỉ ứng dụng có ghi nhận lần mở; không ghi nhận không có nghĩa là không dùng.
+      case 'stale': return a.lastUsed !== null && daysAgo(a.lastUsed) > STALE_DAYS;
+      case 'recent': { const d = installedDaysAgo(a.installDate); return d !== null && d <= RECENT_DAYS; }
+      default: return a.kind === f;
+    }
+  }
+
+  function lastUsedText(a: AppInfo): string {
+    if (a.lastUsed === null) return '';
+    const d = daysAgo(a.lastUsed);
+    return d === 0 ? t('uninstall.usedToday') : t('uninstall.usedDaysAgo', { n: formatCount(d) });
+  }
 
   const errorText = (e: unknown) => tOr(`err.${String(e)}`, String(e));
   const restoreErrorText = (e: string) => tOr(`uninstall.restoreError.${e}`, errorText(e));
@@ -324,12 +355,12 @@
     <div class="toolbar">
       <input class="search" type="search" aria-label={t('uninstall.search')} placeholder={t('uninstall.search')} bind:value={query} disabled={busy} />
       <select aria-label={t('uninstall.filterLabel')} bind:value={filter} disabled={busy}>
-        {#each ['all', 'desktop', 'store', 'builtIn', 'companions'] as const as f (f)}
+        {#each ['all', 'desktop', 'store', 'builtIn', 'large', 'stale', 'recent', 'companions'] as const as f (f)}
           <option value={f}>{t(`uninstall.filter.${f}` as Key)}</option>
         {/each}
       </select>
       <div class="sorts" role="tablist" aria-label={t('uninstall.sortLabel')}>
-        {#each ['name', 'size', 'date'] as const as s (s)}
+        {#each ['name', 'size', 'date', 'used'] as const as s (s)}
           <button role="tab" aria-selected={sort === s} class:active={sort === s} disabled={busy} onclick={() => (sort = s)}>
             {t(`uninstall.sort.${s}` as Key)}
           </button>
@@ -362,7 +393,7 @@
             {/if}
             <div class="text">
               <span class="name">{a.name}</span>
-              <span class="detail">{[a.publisher, a.version, a.installDate].filter(Boolean).join(' · ')}</span>
+              <span class="detail">{[a.publisher, a.version, a.installDate, lastUsedText(a)].filter(Boolean).join(' · ')}</span>
               <span class="badges">
                 <span class="badge">{t(`uninstall.type.${a.kind}` as Key)}</span>
                 {#if a.builtIn}<span class="badge">{t('uninstall.builtIn')}</span>{/if}
@@ -381,6 +412,7 @@
         {/each}
       </ul>
       <p class="note">{t('uninstall.count', { n: formatCount(apps.length) })} · {t('uninstall.capabilityNote')}</p>
+      {#if sort === 'used' || filter === 'stale'}<p class="note">{t('uninstall.usageNote')}</p>{/if}
       {#if mode === 'forced'}
         <form class="force-form" onsubmit={createTarget}>
           <h3>{t('uninstall.unlisted')}</h3>

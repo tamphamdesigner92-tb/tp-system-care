@@ -189,6 +189,8 @@ async fn create_restore_point(state: State<'_, AppState>) -> Result<(), String> 
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             findings: Mutex::new(HashMap::new()),
             cancel: Arc::new(AtomicBool::new(false)),

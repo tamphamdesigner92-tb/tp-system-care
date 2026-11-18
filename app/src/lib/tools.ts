@@ -66,6 +66,8 @@ export interface AppInfo {
   installedAt: number | null;
   /** Ứng dụng được cài trong cùng khoảng thời gian; có thể là phần mềm đi kèm. */
   companions: string[];
+  /** Lần mở gần nhất theo UserAssist (giây Unix); null là không có ghi nhận. */
+  lastUsed: number | null;
 }
 
 export interface UninstallResult {

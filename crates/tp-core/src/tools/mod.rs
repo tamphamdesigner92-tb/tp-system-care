@@ -1,6 +1,7 @@
 //! Công cụ chạy theo yêu cầu, ngoài luồng quét/sửa của engine: Tăng tốc, Gỡ ứng
 //! dụng sạch, Tìm tệp lớn.
 
+pub mod app_usage;
 pub mod browser_extensions;
 pub mod component_store;
 pub mod duplicates;
