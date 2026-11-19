@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
-use tp_core::tools::{component_store, duplicates, install_monitor, largefiles, tuning};
+use tp_core::tools::{
+    component_store, duplicates, install_monitor, largefiles, software_review, tuning,
+};
 
 use crate::{AppState, BusyGuard};
 
@@ -14,6 +16,7 @@ pub struct MaintenanceState {
     duplicates: Mutex<Option<Arc<duplicates::Scan>>>,
     tweaks: Mutex<Option<Arc<Vec<tuning::Tweak>>>>,
     caches: Mutex<Option<Arc<tuning::CacheScan>>>,
+    app_caches: Mutex<Option<Arc<tuning::CacheScan>>>,
     analysis: Mutex<Option<(Arc<component_store::Analysis>, Instant)>>,
     preparation: Mutex<Option<Preparation>>,
     component_status: Arc<Mutex<Value>>,
@@ -27,6 +30,7 @@ impl Default for MaintenanceState {
             duplicates: Mutex::new(None),
             tweaks: Mutex::new(None),
             caches: Mutex::new(None),
+            app_caches: Mutex::new(None),
             analysis: Mutex::new(None),
             preparation: Mutex::new(None),
             component_status: Arc::new(Mutex::new(
@@ -274,6 +278,98 @@ pub async fn browser_flush_dns(state: State<'_, AppState>) -> Result<(), String>
 #[tauri::command]
 pub fn browser_network() -> Result<(), String> {
     tp_core::open_uri("ms-settings:network-status")
+}
+
+#[tauri::command]
+pub async fn app_cache_scan(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tools: State<'_, MaintenanceState>,
+    request_id: String,
+) -> Result<Value, String> {
+    let _guard = JobGuard::acquire(&state, &tools, &request_id)?;
+    *tools.app_caches.lock().unwrap() = None;
+    let cancel = state.cancel.clone();
+    let scan = blocking(move || {
+        let last = Mutex::new(Instant::now() - Duration::from_millis(100));
+        tuning::app_cache_scan(&cancel, &|path, count| {
+            progress(&app, &request_id, path, count, &last)
+        })
+    })
+    .await?;
+    let response = serde_json::to_value(&scan).map_err(|e| e.to_string())?;
+    *tools.app_caches.lock().unwrap() = Some(Arc::new(scan));
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn app_cache_clear(
+    state: State<'_, AppState>,
+    tools: State<'_, MaintenanceState>,
+    ids: Vec<String>,
+    request_id: String,
+) -> Result<tuning::CacheReport, String> {
+    let _guard = JobGuard::acquire(&state, &tools, &request_id)?;
+    let scan = tools
+        .app_caches
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("not_found")?;
+    let cancel = state.cancel.clone();
+    let rescue = state.rescue.clone();
+    blocking(move || tuning::cache_clear(&scan.caches, &ids, &rescue, &cancel)).await
+}
+
+#[tauri::command]
+pub fn app_cache_reveal(tools: State<'_, MaintenanceState>, id: String) -> Result<(), String> {
+    let path = {
+        let cache = tools.app_caches.lock().unwrap();
+        let item = cache
+            .as_ref()
+            .and_then(|scan| scan.caches.iter().find(|item| item.id == id))
+            .ok_or("not_found")?;
+        item.path.clone()
+    };
+    tp_core::reveal(Path::new(&path))
+}
+
+#[tauri::command]
+pub async fn extensions_list(
+    state: State<'_, AppState>,
+) -> Result<software_review::ExtensionScan, String> {
+    let guard = BusyGuard::acquire(&state.busy)?;
+    blocking(move || {
+        let _guard = guard;
+        software_review::extensions()
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn extension_manager(browser: String) -> Result<String, String> {
+    software_review::extension_manager(&browser).map(str::to_owned)
+}
+
+#[tauri::command]
+pub async fn windows_updates_list(
+    state: State<'_, AppState>,
+    tools: State<'_, MaintenanceState>,
+    request_id: String,
+) -> Result<Vec<software_review::InstalledUpdate>, String> {
+    let guard = JobGuard::acquire(&state, &tools, &request_id)?;
+    let cancel = state.cancel.clone();
+    blocking(move || {
+        let _guard = guard;
+        software_review::updates(&cancel)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn windows_updates_open(state: State<'_, AppState>) -> Result<(), String> {
+    let _guard = BusyGuard::acquire(&state.busy)?;
+    software_review::update_settings()
 }
 
 fn require_analysis(tools: &MaintenanceState) -> Result<(), String> {

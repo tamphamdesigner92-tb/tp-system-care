@@ -6,7 +6,7 @@ import { mockIPC } from '@tauri-apps/api/mocks';
 import { MODULES, type Finding, type FixReport, type ModuleId, type RescueRecord, type ScanReport } from '../lib/scan';
 import type { AppInfo, BatchUninstallReport, Leftover, RemoveReport, UninstallMode, UninstallPreparation, UninstallResult,
   DuplicateGroup, DuplicateScan, DuplicateRemoval, ComponentAnalysis, ComponentStatus, Tweak, TweakReport,
-  BrowserCache, BrowserCacheScan, BrowserCacheReport, MonitorSummary, MonitorReport, MonitorChange } from '../lib/tools';
+  BrowserCache, BrowserCacheScan, BrowserCacheReport, MonitorSummary, MonitorReport, MonitorChange, ExtensionScan, InstalledUpdate } from '../lib/tools';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -76,14 +76,19 @@ const startupItems = [
   { id: 'hklmRun|Tablet', name: 'Tablet Driver', command: 'C:\\Program Files\\Tablet\\Tablet.exe', location: 'hklmRun', enabled: true, broken: false, needsAdmin: true },
   { id: 'userFolder|Capture.lnk', name: 'Capture.lnk', command: 'C:\\Users\\demo\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Capture.lnk', location: 'userFolder', enabled: false, broken: false, needsAdmin: false },
 ];
+const usageNow = Math.floor(Date.now() / 1000);
+function dateAgo(days: number): string {
+  const date = new Date(); date.setDate(date.getDate() - days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 const apps: AppInfo[] = [
-  { id: 'HKLM\\a', kind: 'desktop', builtIn: false, removable: true, name: '7-Zip 23.01 (x64)', publisher: 'Igor Pavlov', version: '23.01', installDate: '2026-03-02', size: 5.6e6, installLocation: 'C:\\Program Files\\7-Zip', needsAdmin: true },
+  { id: 'HKLM\\a', kind: 'desktop', builtIn: false, removable: true, name: '7-Zip 23.01 (x64)', publisher: 'Igor Pavlov', version: '23.01', installDate: dateAgo(180), size: 5.6e6, lastUsed: usageNow - 3 * 86400, installedTogether: [], installLocation: 'C:\\Program Files\\7-Zip', needsAdmin: true },
   // Deterministic failure cases exercise queue stopping and no forced fallback.
-  { id: 'HKLM\\b', kind: 'desktop', builtIn: false, removable: true, name: 'Old Game', publisher: 'Game Studio', version: '1.2', installDate: '2024-08-19', size: 42e9, installLocation: 'D:\\Games\\Old Game', needsAdmin: true },
-  { id: 'HKCU\\c', kind: 'desktop', builtIn: false, removable: true, name: 'Chat App', publisher: 'Chat Inc.', version: '5.0.1', installDate: '2026-11-10', size: 320e6, installLocation: null, needsAdmin: false },
-  { id: 'store|Microsoft.WindowsCalculator_8wekyb3d8bbwe', kind: 'store', builtIn: true, removable: true, name: 'Windows Calculator', publisher: 'Microsoft Corporation', version: '11.2409.1.0', installDate: '2026-05-04', size: 32e6, installLocation: 'C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator', needsAdmin: false },
-  { id: 'store|SpotifyAB.SpotifyMusic_zpdnekdrzrea0', kind: 'store', builtIn: false, removable: true, name: 'Spotify', publisher: 'Spotify AB', version: '1.260.0.0', installDate: '2026-10-12', size: 290e6, installLocation: 'C:\\Program Files\\WindowsApps\\SpotifyAB.SpotifyMusic', needsAdmin: false },
-  { id: 'store|Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy', kind: 'store', builtIn: true, removable: false, name: 'Windows Shell Experience Host', publisher: 'Microsoft Corporation', version: '10.0.19041.1', installDate: null, size: null, installLocation: 'C:\\Windows\\SystemApps\\ShellExperienceHost', needsAdmin: false },
+  { id: 'HKLM\\b', kind: 'desktop', builtIn: false, removable: true, name: 'Old Game', publisher: 'Game Studio', version: '1.2', installDate: dateAgo(365), size: 42e9, lastUsed: usageNow - 100 * 86400, installedTogether: [], installLocation: 'D:\\Games\\Old Game', needsAdmin: true },
+  { id: 'HKCU\\c', kind: 'desktop', builtIn: false, removable: true, name: 'Chat App', publisher: 'Chat Inc.', version: '5.0.1', installDate: dateAgo(7), size: 500 * 1024 * 1024, lastUsed: null, installedTogether: ['store|SpotifyAB.SpotifyMusic_zpdnekdrzrea0'], installLocation: null, needsAdmin: false },
+  { id: 'store|Microsoft.WindowsCalculator_8wekyb3d8bbwe', kind: 'store', builtIn: true, removable: true, name: 'Windows Calculator', publisher: 'Microsoft Corporation', version: '11.2409.1.0', installDate: dateAgo(120), size: 32e6, lastUsed: null, installedTogether: [], installLocation: 'C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator', needsAdmin: false },
+  { id: 'store|SpotifyAB.SpotifyMusic_zpdnekdrzrea0', kind: 'store', builtIn: false, removable: true, name: 'Spotify', publisher: 'Spotify AB', version: '1.260.0.0', installDate: dateAgo(7), size: 290e6, lastUsed: usageNow - 86400, installedTogether: ['HKCU\\c'], installLocation: 'C:\\Program Files\\WindowsApps\\SpotifyAB.SpotifyMusic', needsAdmin: false },
+  { id: 'store|Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy', kind: 'store', builtIn: true, removable: false, name: 'Windows Shell Experience Host', publisher: 'Microsoft Corporation', version: '10.0.19041.1', installDate: null, size: null, lastUsed: null, installedTogether: [], installLocation: 'C:\\Windows\\SystemApps\\ShellExperienceHost', needsAdmin: false },
 ];
 // This set models only the current user's installed apps; other users/provisioning are untouched.
 const installedApps = new Set(apps.map((app) => app.id));
@@ -187,7 +192,7 @@ function makeForceTarget(name: string, inputPath: string): AppInfo {
     return lower === other || lower.startsWith(`${other}\\`) || other.startsWith(`${lower}\\`);
   })) throw 'shared_force_target';
   const id = `force|${lower}`;
-  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, installLocation: path, needsAdmin: false };
+  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, lastUsed: null, installedTogether: [], installLocation: path, needsAdmin: false };
   forceTargets.set(id, target);
   return { ...target };
 }
@@ -548,6 +553,13 @@ function startComponent(confirmed: unknown): ComponentStatus {
 }
 
 const tweaks: Tweak[] = [
+  { id: 'enableTransparency', area: 'deep', active: false, available: true, reason: null, needsRestart: true },
+  { id: 'aeroPeek', area: 'deep', active: false, available: true, reason: null, needsRestart: true },
+  { id: 'listviewAlphaSelect', area: 'deep', active: false, available: true, reason: null, needsRestart: true },
+  { id: 'listviewShadow', area: 'deep', active: false, available: true, reason: null, needsRestart: true },
+  { id: 'chromeNetworkPrediction', area: 'browser', active: false, available: true, reason: null, needsRestart: true },
+  { id: 'edgeNetworkPrediction', area: 'browser', active: false, available: false, reason: 'managed_policy', needsRestart: true },
+  { id: 'braveNetworkPrediction', area: 'browser', active: false, available: true, reason: null, needsRestart: true },
   { id: 'minimizeAnimations', area: 'deep', active: false, available: true, reason: null, needsRestart: true },
   { id: 'taskbarAnimations', area: 'deep', active: true, available: true, reason: null, needsRestart: true },
   { id: 'backgroundCapture', area: 'deep', active: false, available: true, reason: null, needsRestart: false },
@@ -574,49 +586,108 @@ function applyTweaks(value: unknown): Promise<TweakReport> {
   });
 }
 
-let cacheInventory: BrowserCache[] | null = null;
-let cacheSelection: BrowserCache[] = [];
-function cacheFixtures(): BrowserCache[] {
-  const paths: [BrowserCache['browser'], string][] = [
-    ['chrome', 'Google\\Chrome\\User Data\\Default'], ['edge', 'Microsoft\\Edge\\User Data\\Default'], ['brave', 'BraveSoftware\\Brave-Browser\\User Data\\Default'],
+type CacheScope = 'browser' | 'apps';
+const cacheInventory: Record<CacheScope, BrowserCache[] | null> = { browser: null, apps: null };
+const cacheSelection: Record<CacheScope, BrowserCache[]> = { browser: [], apps: [] };
+function cacheFixtures(scope: CacheScope): BrowserCache[] {
+  const paths: [BrowserCache['browser'], string][] = scope === 'apps' ? [
+    ['vscode', 'Roaming\\Code'], ['discord', 'Roaming\\discord'], ['slack', 'Roaming\\Slack'],
+  ] : [
+    ['chrome', 'Local\\Google\\Chrome\\User Data\\Default'], ['edge', 'Local\\Microsoft\\Edge\\User Data\\Default'], ['brave', 'Local\\BraveSoftware\\Brave-Browser\\User Data\\Default'],
   ];
-  return [...paths.flatMap(([browser, path]) => ['Cache', 'Code Cache', 'GPUCache'].map((folder, index) => ({
-    id: crypto.randomUUID(), browser, path: `C:\\Users\\demo\\AppData\\Local\\${path}\\${folder}`, bytes: (3 - index) * 40e6, files: (3 - index) * 120,
-  }))), { id: crypto.randomUUID(), browser: 'firefox', path: 'C:\\Users\\demo\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\demo.default\\cache2', bytes: 80e6, files: 220 }];
+  const fixtures = paths.flatMap(([browser, path]) => ['Cache', 'Code Cache', 'GPUCache'].map((folder, index) => ({
+    id: crypto.randomUUID(), browser, path: `C:\\Users\\demo\\AppData\\${path}\\${folder}`, bytes: (3 - index) * 40e6, files: (3 - index) * 120,
+  })));
+  if (scope === 'browser') fixtures.push({ id: crypto.randomUUID(), browser: 'firefox', path: 'C:\\Users\\demo\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\demo.default\\cache2', bytes: 80e6, files: 220 });
+  return fixtures;
 }
-function scanBrowserCaches(args: Record<string, unknown>): Promise<BrowserCacheScan> {
+function scanCaches(args: Record<string, unknown>, scope: CacheScope): Promise<BrowserCacheScan> {
   return maintenanceWork(args.requestId, async (job) => {
-    cacheSelection = [];
-    cacheInventory ??= cacheFixtures();
+    cacheSelection[scope] = [];
+    if (option(scope) === 'error') throw 'review_failed';
+    cacheInventory[scope] ??= cacheFixtures(scope);
     const caches: BrowserCache[] = [];
-    for (const item of cacheInventory) {
+    for (const item of cacheInventory[scope]) {
       await sleep(120); if (job.cancelled) break;
       caches.push({ ...item }); await maintenanceProgress(job, item.path, caches.reduce((sum, c) => sum + c.files, 0));
     }
-    cacheSelection = caches;
+    cacheSelection[scope] = caches;
     return { caches: structuredClone(caches), skipped: 2, cancelled: job.cancelled };
   });
 }
-function clearBrowserCaches(args: Record<string, unknown>): Promise<BrowserCacheReport> {
+function clearCaches(args: Record<string, unknown>, scope: CacheScope): Promise<BrowserCacheReport> {
   return maintenanceWork(args.requestId, async (job) => {
     const ids = selectedIds(args.ids);
-    const picked = ids.map((id) => { const cache = cacheSelection.find((c) => c.id === id); if (!cache) throw 'changed_target'; return cache; });
-    if (option('browser') === 'running' && picked.some((c) => c.browser === 'chrome')) throw 'browser_running';
+    const picked = ids.map((id) => {
+      const cache = cacheSelection[scope].find((c) => c.id === id);
+      if (!cache || !cacheInventory[scope]?.some((c) => c.id === id)) throw 'changed_target';
+      return cache;
+    });
+    if (option(scope) === 'running' && picked.some((c) => c.browser === (scope === 'apps' ? 'vscode' : 'chrome'))) throw 'browser_running';
     let done = 0; let failed = 0; let bytes = 0;
     const recovery: string[] = [];
-    for (const cache of picked) {
+    for (const [index, cache] of picked.entries()) {
       await sleep(300); if (job.cancelled) break;
-      if (option('browser') === 'recovery') {
+      if (option(scope) === 'partial' && index === 0) { failed++; continue; }
+      if (option(scope) === 'recovery') {
         failed++;
         recovery.push(`recovery_pending: original=${cache.path}; staging=C:\\TPRecycleFixture\\payload-${cache.id}; recycle_error=fixture failure`);
         continue;
       }
       done += cache.files; bytes += cache.bytes;
       recovery.push(`recycled: original=${cache.path}; recycle_location=C:\\TPRecycleFixture\\bin-${cache.id}; volume=fixture; file_id=${cache.id}`);
-      cacheInventory = cacheInventory!.filter((c) => c.id !== cache.id);
-      cacheSelection = cacheSelection.filter((c) => c.id !== cache.id);
+      cacheInventory[scope] = cacheInventory[scope]!.filter((c) => c.id !== cache.id);
+      cacheSelection[scope] = cacheSelection[scope].filter((c) => c.id !== cache.id);
     }
-    return { done, failed, bytes, recovery, cancelled: job.cancelled, recordId: permanentRecord(recovery.length ? `browserCache; ${JSON.stringify(recovery)}` : 'browserCache', done, failed, bytes) };
+    const title = 'browserCache'; // Native app cleanup reuses tuning::cache_clear's Rescue title.
+    return { done, failed, bytes, recovery, cancelled: job.cancelled, recordId: permanentRecord(recovery.length ? `${title}; ${JSON.stringify(recovery)}` : title, done, failed, bytes) };
+  });
+}
+function revealCache(id: unknown, scope: CacheScope): Promise<void> {
+  return toolWork(async () => {
+    if (!cacheSelection[scope].some((c) => c.id === id) || !cacheInventory[scope]?.some((c) => c.id === id)) throw 'changed_target';
+    // Deliberately no filesystem or shell operation in the browser mock.
+  });
+}
+
+// Entirely fake review fixtures. Opening a manager never mutates these inventories.
+function listExtensions(): Promise<ExtensionScan> {
+  return toolWork(async () => {
+    await sleep(500);
+    if (option('review') === 'error') throw 'review_failed';
+    // Native inventory treats managed as managed OR unverified; Chromium enabled state is unknown.
+    const result: ExtensionScan = { skipped: 0, truncated: false, extensions: [
+      { id: 'fixture-reader', browser: 'chrome', profile: 'Default', name: 'Demo Reader (fixture)', version: '1.0', enabled: null, managed: true, permissions: ['storage', 'activeTab'], bytes: 4e6 },
+      { id: 'fixture-reader', browser: 'chrome', profile: 'Profile 1', name: 'Demo Reader (fixture)', version: '1.0', enabled: null, managed: true, permissions: ['storage', 'activeTab'], bytes: 4e6 },
+      { id: 'fixture-managed', browser: 'edge', profile: 'Default', name: 'Organization Helper (fixture)', version: '2.1', enabled: null, managed: true, permissions: ['tabs', 'https://example.invalid/*'], bytes: 8e6 },
+      { id: 'fixture-unknown', browser: 'brave', profile: 'Profile 2', name: 'Unknown State (fixture)', version: '0.8', enabled: null, managed: true, permissions: [], bytes: 1024 },
+      // Firefox does not measure extension size: zero means unknown, not empty.
+      { id: 'fixture-addon@example.invalid', browser: 'firefox', profile: 'demo.default-release', name: 'Demo Add-on (fixture)', version: '1.2', enabled: false, managed: true, permissions: ['storage'], bytes: 0 },
+    ] };
+    if (option('review') === 'partial') { result.extensions = result.extensions.slice(0, 3); result.skipped = 2; result.truncated = true; }
+    if (option('review') === 'empty') result.extensions = [];
+    return structuredClone(result);
+  });
+}
+function managerAddress(browser: unknown): Promise<string> {
+  return toolWork(async () => {
+    const uris = new Map([['chrome', 'chrome://extensions/'], ['edge', 'edge://extensions/'], ['brave', 'brave://extensions/'], ['firefox', 'about:addons']]);
+    const uri = typeof browser === 'string' ? uris.get(browser) : undefined;
+    if (!uri) throw 'unsupported_browser';
+    return uri; // No launch and no extension removal, even in mocks.
+  });
+}
+function listUpdates(args: Record<string, unknown>): Promise<InstalledUpdate[]> {
+  return maintenanceWork(args.requestId, async (job) => {
+    for (let n = 0; n < 8; n++) { await sleep(100); if (job.cancelled) throw 'cancelled'; }
+    // This DTO cannot represent partial inventory: fail closed rather than claim completeness.
+    if (['error', 'partial'].includes(option('review') ?? '')) throw 'review_failed';
+    if (option('review') === 'empty') return [];
+    return [
+      { id: 'fixture-update-1', title: 'Demo cumulative update (fixture, not a live update)', kb: ['KB0000001'], uninstallable: true },
+      { id: 'fixture-update-2', title: 'Demo servicing update (fixture, not a live update)', kb: ['KB0000002', 'KB0000003'], uninstallable: false },
+      { id: 'fixture-update-3', title: 'Demo update without KB (fixture)', kb: [], uninstallable: false },
+    ];
   });
 }
 
@@ -713,11 +784,20 @@ export function install(): void {
           if (toolBusy || nativeWait) throw 'busy';
           return structuredClone(tweaks);
         case 'tuning_apply': return applyTweaks(args.ids);
-        case 'browser_cache_scan': return scanBrowserCaches(args);
-        case 'browser_cache_clear': return clearBrowserCaches(args);
-        case 'browser_cache_reveal':
-          if (!cacheSelection.some((c) => c.id === args.id)) throw 'changed_target';
-          return;
+        case 'browser_cache_scan': return scanCaches(args, 'browser');
+        case 'browser_cache_clear': return clearCaches(args, 'browser');
+        case 'browser_cache_reveal': return revealCache(args.id, 'browser');
+        case 'app_cache_scan': return scanCaches(args, 'apps');
+        case 'app_cache_clear': return clearCaches(args, 'apps');
+        case 'app_cache_reveal': return revealCache(args.id, 'apps');
+        case 'extensions_list': return listExtensions();
+        case 'extension_manager': return managerAddress(args.browser);
+        case 'windows_updates_list': return listUpdates(args);
+        case 'windows_updates_open': return toolWork(async () => {
+          if (option('review') === 'error') throw 'review_failed';
+          // Fake handoff only. No live Settings launch, mutation or removal record.
+          await sleep(80);
+        });
         case 'browser_flush_dns':
           return toolWork(() => sleep(450));
         case 'browser_network':
@@ -818,7 +898,10 @@ export function install(): void {
               preparation = null;
               leftoverCache.clear();
               forceTargets.clear();
-              return structuredClone(apps.filter((app) => installedApps.has(app.id)));
+              return structuredClone(apps.filter((app) => installedApps.has(app.id)).map((app) => ({
+                ...app, lastUsed: option('usage') === 'unknown' ? null : app.lastUsed,
+                installedTogether: app.installedTogether.filter((id) => installedApps.has(id)),
+              })));
             } finally { toolBusy = false; }
           })();
         case 'app_force_target':

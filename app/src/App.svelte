@@ -13,7 +13,7 @@
   /** Rescue Center mở từ thanh tiêu đề, không nằm trong thanh bên. */
   let view = $state<PageId | 'rescue'>('care');
   let elevated = $state<boolean | null>(null);
-  let toolboxTool = $state<'uninstaller' | 'browser' | 'monitor' | null>(null);
+  let toolboxTool = $state<'uninstaller' | 'browser' | 'monitor' | 'extensions' | 'updates' | null>(null);
 
   const page = $derived(pages.find((p) => p.id === view));
 

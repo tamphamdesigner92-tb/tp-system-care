@@ -3,10 +3,11 @@
   import Uninstaller from '../lib/components/Uninstaller.svelte';
   import Tuning from '../lib/components/Tuning.svelte';
   import InstallMonitor from '../lib/components/InstallMonitor.svelte';
+  import SoftwareReview from '../lib/components/SoftwareReview.svelte';
   import { t, type Key } from '../lib/i18n.svelte';
 
   /** Công cụ đang mở; `null` là lưới công cụ. */
-  let { tool = $bindable(null) }: { tool: 'uninstaller' | 'browser' | 'monitor' | null } = $props();
+  let { tool = $bindable(null) }: { tool: 'uninstaller' | 'browser' | 'monitor' | 'extensions' | 'updates' | null } = $props();
 
   const upcoming: Key[] = [
     'toolbox.lock',
@@ -21,8 +22,9 @@
 
 <section class="toolbox">
   {#if tool === 'uninstaller'}
-    <header>
+    <header class="uninstaller-heading">
       <button class="link" onclick={() => (tool = null)}><Icon name="back" size={14} /> {t('nav.toolbox')}</button>
+      <span class="separator" aria-hidden="true">/</span>
       <h1>{t('toolbox.uninstaller')}</h1>
     </header>
     <Uninstaller />
@@ -32,6 +34,12 @@
       <h1>{t(tool === 'browser' ? 'toolbox.browser' : 'toolbox.monitor')}</h1>
     </header>
     {#if tool === 'browser'}<Tuning area="browser" />{:else}<InstallMonitor />{/if}
+  {:else if tool === 'extensions' || tool === 'updates'}
+    <header>
+      <button class="link" onclick={() => (tool = null)}><Icon name="back" size={14} /> {t('nav.toolbox')}</button>
+      <h1>{t(tool === 'extensions' ? 'toolbox.extensions' : 'toolbox.updates')}</h1>
+    </header>
+    {#key tool}<SoftwareReview area={tool} />{/key}
   {:else}
     <h1>{t('nav.toolbox')}</h1>
     <div class="grid">
@@ -46,6 +54,14 @@
       <button class="tool" onclick={() => (tool = 'monitor')}>
         <span class="tool-name">{t('toolbox.monitor')}</span>
         <span class="tool-desc">{t('toolbox.monitorDesc')}</span>
+      </button>
+      <button class="tool" onclick={() => (tool = 'extensions')}>
+        <span class="tool-name">{t('toolbox.extensions')}</span>
+        <span class="tool-desc">{t('toolbox.extensionsDesc')}</span>
+      </button>
+      <button class="tool" onclick={() => (tool = 'updates')}>
+        <span class="tool-name">{t('toolbox.updates')}</span>
+        <span class="tool-desc">{t('toolbox.updatesDesc')}</span>
       </button>
       {#each upcoming as key (key)}
         <div class="tool off">
@@ -73,6 +89,11 @@
     flex-direction: column;
     gap: 4px;
   }
+
+  .uninstaller-heading { flex-direction: row; align-items: center; gap: 12px; min-height: 28px; }
+  .uninstaller-heading .link { align-self: auto; }
+  .uninstaller-heading h1 { font-size: 13px; color: var(--text-dim); font-weight: 400; }
+  .separator { color: var(--text-faint); }
 
   h1 {
     margin: 0;

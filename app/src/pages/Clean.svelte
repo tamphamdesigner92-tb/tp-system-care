@@ -3,8 +3,9 @@
   import DuplicateFiles from '../lib/components/DuplicateFiles.svelte';
   import ComponentStore from '../lib/components/ComponentStore.svelte';
   import { t } from '../lib/i18n.svelte';
+  import Tuning from '../lib/components/Tuning.svelte';
 
-  let tab = $state<'large' | 'duplicates' | 'components'>('large');
+  let tab = $state<'large' | 'duplicates' | 'components' | 'apps'>('large');
 </script>
 
 <section class="clean-host">
@@ -12,10 +13,12 @@
     <button class="btn" class:primary={tab === 'large'} aria-pressed={tab === 'large'} onclick={() => (tab = 'large')}>{t('clean.title')}</button>
     <button class="btn" class:primary={tab === 'duplicates'} aria-pressed={tab === 'duplicates'} onclick={() => (tab = 'duplicates')}>{t('duplicate.title')}</button>
     <button class="btn" class:primary={tab === 'components'} aria-pressed={tab === 'components'} onclick={() => (tab = 'components')}>{t('component.title')}</button>
+    <button class="btn" class:primary={tab === 'apps'} aria-pressed={tab === 'apps'} onclick={() => (tab = 'apps')}>{t('appCache.title')}</button>
   </nav>
   <div class="large" class:off={tab !== 'large'}><LargeFiles /></div>
   {#if tab === 'duplicates'}<div class="content"><DuplicateFiles /></div>
-  {:else if tab === 'components'}<div class="content"><ComponentStore /></div>{/if}
+  {:else if tab === 'components'}<div class="content"><ComponentStore /></div>
+  {:else if tab === 'apps'}<div class="content"><Tuning area="apps" /></div>{/if}
 </section>
 
 <style>

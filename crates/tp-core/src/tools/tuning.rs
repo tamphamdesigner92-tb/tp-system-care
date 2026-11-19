@@ -1,4 +1,4 @@
-//! Fixed current-user tweaks and recycle-only browser-cache maintenance.
+//! Fixed current-user tweaks and proof-bound, recycle-only cache maintenance.
 
 use std::collections::HashSet;
 use std::fs;
@@ -15,72 +15,129 @@ use crate::rescue::{Rescue, UndoOp};
 use crate::winutil::{self, Known};
 
 #[derive(Debug)]
+enum Target {
+    String(&'static str),
+    Dword(u32),
+}
+
+#[derive(Debug)]
 struct Spec {
     id: &'static str,
     area: &'static str,
     subkey: &'static str,
     name: &'static str,
-    string: bool,
+    target: Target,
 }
 
-static SPECS: [Spec; 7] = [
+static SPECS: [Spec; 14] = [
     Spec {
         id: "minimizeAnimations",
         area: "deep",
         subkey: r"Control Panel\Desktop\WindowMetrics",
         name: "MinAnimate",
-        string: true,
+        target: Target::String("0"),
     },
     Spec {
         id: "taskbarAnimations",
         area: "deep",
         subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
         name: "TaskbarAnimations",
-        string: false,
+        target: Target::Dword(0),
     },
     Spec {
         id: "backgroundCapture",
         area: "deep",
         subkey: r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
         name: "HistoricalCaptureEnabled",
-        string: false,
+        target: Target::Dword(0),
     },
     Spec {
         id: "chromeBackground",
         area: "browser",
         subkey: r"Software\Policies\Google\Chrome",
         name: "BackgroundModeEnabled",
-        string: false,
+        target: Target::Dword(0),
     },
     Spec {
         id: "edgeBackground",
         area: "browser",
         subkey: r"Software\Policies\Microsoft\Edge",
         name: "BackgroundModeEnabled",
-        string: false,
+        target: Target::Dword(0),
     },
     Spec {
         id: "edgeStartupBoost",
         area: "browser",
         subkey: r"Software\Policies\Microsoft\Edge",
         name: "StartupBoostEnabled",
-        string: false,
+        target: Target::Dword(0),
     },
     Spec {
         id: "braveBackground",
         area: "browser",
         subkey: r"Software\Policies\BraveSoftware\Brave",
         name: "BackgroundModeEnabled",
-        string: false,
+        target: Target::Dword(0),
+    },
+    Spec {
+        id: "enableTransparency",
+        area: "deep",
+        subkey: r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        name: "EnableTransparency",
+        target: Target::Dword(0),
+    },
+    Spec {
+        id: "aeroPeek",
+        area: "deep",
+        subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+        name: "DisablePreviewDesktop",
+        target: Target::Dword(1),
+    },
+    Spec {
+        // Disable the translucent selection rectangle, not mouse-pointer shadow.
+        id: "listviewAlphaSelect",
+        area: "deep",
+        subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+        name: "ListviewAlphaSelect",
+        target: Target::Dword(0),
+    },
+    Spec {
+        // Disable desktop icon-label shadows. Never edit UserPreferencesMask.
+        id: "listviewShadow",
+        area: "deep",
+        subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+        name: "ListviewShadow",
+        target: Target::Dword(0),
+    },
+    Spec {
+        // Policy value 2 disables network prediction, not ordinary networking.
+        id: "chromeNetworkPrediction",
+        area: "browser",
+        subkey: r"Software\Policies\Google\Chrome",
+        name: "NetworkPredictionOptions",
+        target: Target::Dword(2),
+    },
+    Spec {
+        id: "edgeNetworkPrediction",
+        area: "browser",
+        subkey: r"Software\Policies\Microsoft\Edge",
+        name: "NetworkPredictionOptions",
+        target: Target::Dword(2),
+    },
+    Spec {
+        id: "braveNetworkPrediction",
+        area: "browser",
+        subkey: r"Software\Policies\BraveSoftware\Brave",
+        name: "NetworkPredictionOptions",
+        target: Target::Dword(2),
     },
 ];
 
 impl Spec {
     fn target(&self) -> RawValue {
-        if self.string {
-            RawValue::sz("0")
-        } else {
-            RawValue::dword(0)
+        match self.target {
+            Target::String(value) => RawValue::sz(value),
+            Target::Dword(value) => RawValue::dword(value),
         }
     }
 }
@@ -529,37 +586,66 @@ fn apply_with(
 // ------------------------------------------------------------------ Caches
 
 #[derive(Debug)]
-struct Browser {
+enum CacheLayout {
+    ChromiumProfiles,
+    FirefoxProfiles,
+    Application,
+}
+
+#[derive(Debug)]
+struct CacheApp {
     id: &'static str,
     data: &'static [&'static str],
     executable: &'static str,
-    firefox: bool,
+    layout: CacheLayout,
 }
 
-static BROWSERS: [Browser; 4] = [
-    Browser {
+static BROWSERS: [CacheApp; 4] = [
+    CacheApp {
         id: "chrome",
         data: &["Google", "Chrome", "User Data"],
         executable: "chrome.exe",
-        firefox: false,
+        layout: CacheLayout::ChromiumProfiles,
     },
-    Browser {
+    CacheApp {
         id: "edge",
         data: &["Microsoft", "Edge", "User Data"],
         executable: "msedge.exe",
-        firefox: false,
+        layout: CacheLayout::ChromiumProfiles,
     },
-    Browser {
+    CacheApp {
         id: "brave",
         data: &["BraveSoftware", "Brave-Browser", "User Data"],
         executable: "brave.exe",
-        firefox: false,
+        layout: CacheLayout::ChromiumProfiles,
     },
-    Browser {
+    CacheApp {
         id: "firefox",
         data: &["Mozilla", "Firefox", "Profiles"],
         executable: "firefox.exe",
-        firefox: true,
+        layout: CacheLayout::FirefoxProfiles,
+    },
+];
+// Direct children of the current user's Known::RoamingAppData only. Do not
+// include these in BROWSERS: browser discovery must remain browser-only.
+static APPLICATIONS: [CacheApp; 3] = [
+    CacheApp {
+        id: "vscode",
+        data: &["Code"],
+        executable: "Code.exe",
+        layout: CacheLayout::Application,
+    },
+    CacheApp {
+        id: "discord",
+        data: &["discord"],
+        executable: "discord.exe",
+        layout: CacheLayout::Application,
+    },
+    CacheApp {
+        id: "slack",
+        data: &["Slack"],
+        executable: "slack.exe",
+        layout: CacheLayout::Application,
     },
 ];
 const CHROMIUM_CACHES: [&str; 3] = ["Cache", "Code Cache", "GPUCache"];
@@ -602,9 +688,9 @@ struct FileProof {
 #[derive(Clone, Debug)]
 struct CacheProof {
     id: String,
-    browser: &'static Browser,
-    local: PathBuf,
-    profile: String,
+    app: &'static CacheApp,
+    base: PathBuf,
+    profile: Option<String>,
     kind: &'static str,
     root: PathBuf,
     ancestors: Vec<DirectoryProof>,
@@ -615,6 +701,7 @@ struct CacheProof {
 #[serde(rename_all = "camelCase")]
 pub struct Cache {
     pub id: String,
+    /// Browser or application id (including vscode/discord/slack).
     pub browser: &'static str,
     pub path: String,
     pub bytes: u64,
@@ -913,23 +1000,63 @@ fn sensitive(name: &str) -> bool {
             | "places.sqlite"
             | "prefs.js"
             | "user.js"
+            | "local storage"
+            | "indexeddb"
+            | "settings"
+            | "settings.json"
+            | "documents"
     )
 }
 
-fn profile_name(browser: &Browser, name: &str) -> bool {
+fn profile_name(browser: &CacheApp, name: &str) -> bool {
     plain_name(name)
-        && (browser.firefox
-            || name == "Default"
-            || name
-                .strip_prefix("Profile ")
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())))
+        && match browser.layout {
+            CacheLayout::FirefoxProfiles => true,
+            CacheLayout::ChromiumProfiles => {
+                name == "Default"
+                    || name
+                        .strip_prefix("Profile ")
+                        .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+            }
+            CacheLayout::Application => false,
+        }
 }
 
-fn cache_kinds(browser: &Browser) -> &'static [&'static str] {
-    if browser.firefox {
-        &FIREFOX_CACHES
-    } else {
-        &CHROMIUM_CACHES
+fn cache_kinds(app: &CacheApp) -> &'static [&'static str] {
+    match app.layout {
+        CacheLayout::FirefoxProfiles => &FIREFOX_CACHES,
+        CacheLayout::ChromiumProfiles | CacheLayout::Application => &CHROMIUM_CACHES,
+    }
+}
+
+// Used both at discovery and before clearing/revealing: no caller-provided
+// executable, profile, directory or extra cache kind can extend this allowlist.
+fn cache_location(
+    app: &CacheApp,
+    base: &Path,
+    profile: Option<&str>,
+    kind: &str,
+) -> Result<(PathBuf, String), String> {
+    if !BROWSERS
+        .iter()
+        .chain(APPLICATIONS.iter())
+        .any(|known| std::ptr::eq(known, app))
+        || !cache_kinds(app).contains(&kind)
+    {
+        return Err("invalid_cache_snapshot".into());
+    }
+    let data = join_parts(base, app.data);
+    match (&app.layout, profile) {
+        (CacheLayout::Application, None) => Ok((data.join(kind), format!("{}:{kind}", app.id))),
+        (CacheLayout::ChromiumProfiles | CacheLayout::FirefoxProfiles, Some(profile))
+            if profile_name(app, profile) =>
+        {
+            Ok((
+                data.join(profile).join(kind),
+                format!("{}:{profile}:{kind}", app.id),
+            ))
+        }
+        _ => Err("invalid_cache_snapshot".into()),
     }
 }
 
@@ -1039,50 +1166,12 @@ fn scan_at(
                     scan.cancelled = true;
                     break 'browsers;
                 }
-                let root = profile.join(kind);
-                match fs::symlink_metadata(&root) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(_) => {
-                        scan.skipped += 1;
-                        continue;
+                match discover_cache(browser, local, Some(&name), kind) {
+                    Ok(Some(proof)) => {
+                        collect_snapshot(proof, &mut scan, &mut budget, limits, cancel, progress);
                     }
-                    Ok(_) => {}
-                }
-                let ancestors = match directory_proofs(&root) {
-                    Ok(proofs) => proofs,
-                    Err(_) => {
-                        scan.skipped += 1;
-                        continue;
-                    }
-                };
-                let id = format!("{}:{}:{}", browser.id, name, kind);
-                let mut proof = CacheProof {
-                    id: id.clone(),
-                    browser,
-                    local: local.to_path_buf(),
-                    profile: name.clone(),
-                    kind,
-                    root: root.clone(),
-                    ancestors,
-                    files: Vec::new(),
-                };
-                collect_cache(&mut proof, &mut scan, &mut budget, limits, cancel, progress);
-                if !proof.files.is_empty() {
-                    let bytes = proof
-                        .files
-                        .iter()
-                        .try_fold(0u64, |sum, file| sum.checked_add(file.stamp.bytes));
-                    match bytes {
-                        Some(bytes) => scan.caches.push(Cache {
-                            id,
-                            browser: browser.id,
-                            path: root.to_string_lossy().into_owned(),
-                            bytes,
-                            files: proof.files.len() as u64,
-                            proof,
-                        }),
-                        None => scan.skipped += 1,
-                    }
+                    Ok(None) => {}
+                    Err(_) => scan.skipped += 1,
                 }
                 if scan.cancelled || budget.exhausted {
                     break 'browsers;
@@ -1092,6 +1181,117 @@ fn scan_at(
     }
     scan.cancelled |= cancel.load(Ordering::Relaxed);
     Ok(scan)
+}
+
+/// Scan only Code, discord and Slack under the current user's RoamingAppData.
+/// Cache DTOs/proofs go to the same cache_clear pipeline as browser caches;
+/// `browser` carries the application id. No process inspection or mutation here.
+pub fn app_cache_scan(
+    cancel: &AtomicBool,
+    progress: &dyn Fn(&Path, usize),
+) -> Result<CacheScan, String> {
+    if !cfg!(windows) {
+        return Err("unsupported_platform".into());
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(CacheScan {
+            cancelled: true,
+            ..Default::default()
+        });
+    }
+    let roaming =
+        winutil::known_folder(Known::RoamingAppData).ok_or("roaming_app_data_unavailable")?;
+    app_scan_at(&roaming, cancel, progress, LIMITS)
+}
+
+fn app_scan_at(
+    roaming: &Path,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(&Path, usize),
+    limits: Limits,
+) -> Result<CacheScan, String> {
+    let mut scan = CacheScan::default();
+    if cancel.load(Ordering::Relaxed) {
+        scan.cancelled = true;
+        return Ok(scan);
+    }
+    // Reject redirected RoamingAppData and every reparse/alias ancestor, just
+    // as browser discovery does. No enumeration of arbitrary application data.
+    directory_proofs(roaming)?;
+    let mut budget = Budget::default();
+    'apps: for app in &APPLICATIONS {
+        for &kind in cache_kinds(app) {
+            if cancel.load(Ordering::Relaxed) {
+                scan.cancelled = true;
+                break 'apps;
+            }
+            match discover_cache(app, roaming, None, kind) {
+                Ok(Some(proof)) => {
+                    collect_snapshot(proof, &mut scan, &mut budget, limits, cancel, progress);
+                }
+                Ok(None) => {}
+                Err(_) => scan.skipped += 1,
+            }
+            if scan.cancelled || budget.exhausted {
+                break 'apps;
+            }
+        }
+    }
+    scan.cancelled |= cancel.load(Ordering::Relaxed);
+    Ok(scan)
+}
+
+fn discover_cache(
+    app: &'static CacheApp,
+    base: &Path,
+    profile: Option<&str>,
+    kind: &'static str,
+) -> Result<Option<CacheProof>, String> {
+    let (root, id) = cache_location(app, base, profile, kind)?;
+    match fs::symlink_metadata(&root) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(_) => {}
+    }
+    let ancestors = directory_proofs(&root)?;
+    Ok(Some(CacheProof {
+        id,
+        app,
+        base: base.to_path_buf(),
+        profile: profile.map(str::to_owned),
+        kind,
+        root,
+        ancestors,
+        files: Vec::new(),
+    }))
+}
+
+fn collect_snapshot(
+    mut proof: CacheProof,
+    scan: &mut CacheScan,
+    budget: &mut Budget,
+    limits: Limits,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(&Path, usize),
+) {
+    collect_cache(&mut proof, scan, budget, limits, cancel, progress);
+    if !proof.files.is_empty() {
+        let bytes = proof
+            .files
+            .iter()
+            .try_fold(0u64, |sum, file| sum.checked_add(file.stamp.bytes));
+        match bytes {
+            Some(bytes) => scan.caches.push(Cache {
+                id: proof.id.clone(),
+                browser: proof.app.id,
+                path: proof.root.to_string_lossy().into_owned(),
+                bytes,
+                files: proof.files.len() as u64,
+                proof,
+            }),
+            None => scan.skipped += 1,
+        }
+    }
 }
 
 fn collect_cache(
@@ -1210,17 +1410,11 @@ fn collect_cache(
 
 fn validate_cache(cache: &Cache) -> Result<(), String> {
     let proof = &cache.proof;
-    if !BROWSERS
-        .iter()
-        .any(|browser| std::ptr::eq(browser, proof.browser))
-        || !profile_name(proof.browser, &proof.profile)
-        || !cache_kinds(proof.browser).contains(&proof.kind)
-        || proof.root
-            != join_parts(&proof.local, proof.browser.data)
-                .join(&proof.profile)
-                .join(proof.kind)
+    let (root, id) = cache_location(proof.app, &proof.base, proof.profile.as_deref(), proof.kind)?;
+    if proof.root != root
+        || proof.id != id
         || cache.id != proof.id
-        || cache.browser != proof.browser.id
+        || cache.browser != proof.app.id
         || Path::new(&cache.path) != proof.root
     {
         return Err("invalid_cache_snapshot".into());
@@ -1256,7 +1450,7 @@ fn revalidate(proof: &CacheProof, file: &FileProof) -> Result<Vec<FileGuard>, St
     Ok(guards)
 }
 
-fn matching_image(browser: &Browser, image: &Path) -> bool {
+fn matching_image(browser: &CacheApp, image: &Path) -> bool {
     image.is_absolute()
         && image
             .file_name()
@@ -1265,7 +1459,7 @@ fn matching_image(browser: &Browser, image: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn browser_running(browser: &Browser) -> Result<bool, String> {
+fn browser_running(browser: &CacheApp) -> Result<bool, String> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
     use windows::Win32::System::ProcessStatus::K32EnumProcesses;
@@ -1291,7 +1485,7 @@ fn browser_running(browser: &Browser) -> Result<bool, String> {
     };
     let mut unreadable = false;
     for &pid in &pids[..count] {
-        // 0 = idle and 4 = kernel System, neither is a user browser.
+        // 0 = idle and 4 = kernel System, neither is a user application.
         if pid == 0 || pid == 4 {
             continue;
         }
@@ -1341,7 +1535,7 @@ fn browser_running(browser: &Browser) -> Result<bool, String> {
 }
 
 #[cfg(not(windows))]
-fn browser_running(_: &Browser) -> Result<bool, String> {
+fn browser_running(_: &CacheApp) -> Result<bool, String> {
     Err("unsupported_platform".into())
 }
 
@@ -1370,7 +1564,7 @@ fn recycle_only(
             guard_directories(&proof.ancestors)?;
             guard_directories(&file.parents)?;
             if !restoring {
-                if browser_running(proof.browser)? {
+                if browser_running(proof.app)? {
                     return Err("browser_running".into());
                 }
                 revalidate(proof, file)?;
@@ -1409,9 +1603,10 @@ fn save_cache(journal: &dyn Journal, report: &CacheReport) -> Result<(), String>
 }
 
 /// Clear only files in backend scan proofs. Unselected/new/changed files and
-/// all directories are untouched. A browser that starts mid-operation stops
-/// further work with `browser_running`; prior work remains in `browserCache`
-/// history. Cancellation returns the partial report. No Rescue undo is stored.
+/// all directories are untouched. A browser/application starting mid-operation
+/// stops further work with `browser_running` (the existing error key). Prior work
+/// remains in `browserCache` history: UI must give that key a generic cache title.
+/// Cancellation returns the partial report. No Rescue undo is stored.
 pub fn cache_clear(
     caches: &[Cache],
     ids: &[String],
@@ -1444,7 +1639,7 @@ fn clear_with(
     ids: &[String],
     journal: &dyn Journal,
     cancel: &AtomicBool,
-    running: &dyn Fn(&Browser) -> Result<bool, String>,
+    running: &dyn Fn(&CacheApp) -> Result<bool, String>,
     recycle: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<CacheReport, String> {
     clear_verified_with(caches, ids, journal, cancel, running, &|_, file, _, _| {
@@ -1457,7 +1652,7 @@ fn clear_verified_with(
     ids: &[String],
     journal: &dyn Journal,
     cancel: &AtomicBool,
-    running: &dyn Fn(&Browser) -> Result<bool, String>,
+    running: &dyn Fn(&CacheApp) -> Result<bool, String>,
     recycle: &CacheRecycler<'_>,
 ) -> Result<CacheReport, String> {
     let selected = select(caches, ids, |cache| cache.id.as_str())?;
@@ -1470,10 +1665,10 @@ fn clear_verified_with(
         return Ok(report);
     }
     // Refuse the entire selection before touching ANY file if a matching
-    // browser is running, even if its selected cache happens to be unlocked.
+    // application is running, even if its selected cache happens to be unlocked.
     let mut checked = HashSet::new();
     for cache in &selected {
-        if checked.insert(cache.proof.browser.id) && running(cache.proof.browser)? {
+        if checked.insert(cache.proof.app.id) && running(cache.proof.app)? {
             return Err("browser_running".into());
         }
     }
@@ -1483,7 +1678,7 @@ fn clear_verified_with(
                 report.cancelled = true;
                 break;
             }
-            match running(cache.proof.browser) {
+            match running(cache.proof.app) {
                 Ok(false) => {}
                 result => {
                     if report.failed > 0 && report.record_id.is_none() {
@@ -1511,7 +1706,7 @@ fn clear_verified_with(
             report.record_id.get_or_insert_with(|| journal.new_id());
             save_cache(journal, &report)?;
             // Recheck after the potentially slow durable history flush.
-            if running(cache.proof.browser)? {
+            if running(cache.proof.app)? {
                 return Err("browser_running".into());
             }
             let final_guards = match revalidate(&cache.proof, file) {
@@ -1639,6 +1834,72 @@ mod tests {
         }
         fn scan(&self) -> CacheScan {
             scan_at(&self.root, &AtomicBool::new(false), &|_, _| {}, LIMITS).unwrap()
+        }
+        fn app_scan(&self) -> CacheScan {
+            app_scan_at(&self.root, &AtomicBool::new(false), &|_, _| {}, LIMITS).unwrap()
+        }
+        fn directory_alias(&self, path: &Path, target: &Path) {
+            assert!(path.starts_with(&self.root) && target.starts_with(&self.root));
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, path).unwrap();
+            #[cfg(windows)]
+            {
+                // An owned temporary junction needs no symlink privilege, shell,
+                // process, dependency, or change to the machine's permissions.
+                use std::os::windows::fs::OpenOptionsExt;
+                use std::os::windows::io::AsRawHandle;
+                #[link(name = "kernel32")]
+                unsafe extern "system" {
+                    fn DeviceIoControl(
+                        handle: *mut std::ffi::c_void,
+                        code: u32,
+                        input: *const std::ffi::c_void,
+                        input_len: u32,
+                        output: *mut std::ffi::c_void,
+                        output_len: u32,
+                        returned: *mut u32,
+                        overlapped: *mut std::ffi::c_void,
+                    ) -> i32;
+                }
+                let print: Vec<u16> = target.to_str().unwrap().encode_utf16().collect();
+                let substitute: Vec<u16> = format!(r"\??\{}", target.display())
+                    .encode_utf16()
+                    .collect();
+                let mut data = Vec::new();
+                data.extend_from_slice(&0xa0000003u32.to_le_bytes()); // mount-point tag
+                data.extend_from_slice(
+                    &((8 + (substitute.len() + print.len() + 2) * 2) as u16).to_le_bytes(),
+                );
+                data.extend_from_slice(&0u16.to_le_bytes());
+                data.extend_from_slice(&0u16.to_le_bytes());
+                data.extend_from_slice(&((substitute.len() * 2) as u16).to_le_bytes());
+                data.extend_from_slice(&(((substitute.len() + 1) * 2) as u16).to_le_bytes());
+                data.extend_from_slice(&((print.len() * 2) as u16).to_le_bytes());
+                for value in substitute.into_iter().chain([0]).chain(print).chain([0]) {
+                    data.extend_from_slice(&value.to_le_bytes());
+                }
+                fs::create_dir(path).unwrap();
+                let file = fs::OpenOptions::new()
+                    .access_mode(0x40000000) // GENERIC_WRITE, owned directory only
+                    .share_mode(7)
+                    .custom_flags(0x02200000) // OPEN_REPARSE_POINT | BACKUP_SEMANTICS
+                    .open(path)
+                    .unwrap();
+                let mut returned = 0;
+                let result = unsafe {
+                    DeviceIoControl(
+                        file.as_raw_handle(),
+                        0x900a4,
+                        data.as_ptr().cast(),
+                        data.len() as u32,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut returned,
+                        std::ptr::null_mut(),
+                    )
+                };
+                assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
+            }
         }
     }
     impl Drop for Fixture {
@@ -1845,7 +2106,195 @@ mod tests {
                 }
             );
         }
-        assert_eq!(SPECS.len(), 7);
+        assert_eq!(expected.len(), 7);
+        assert_eq!(SPECS.len(), 14);
+    }
+
+    #[test]
+    fn new_registry_targets_are_exact_and_have_distinct_safe_ids() {
+        let explorer = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+        let expected = [
+            (
+                "enableTransparency",
+                "deep",
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "EnableTransparency",
+                0,
+            ),
+            ("aeroPeek", "deep", explorer, "DisablePreviewDesktop", 1),
+            (
+                "listviewAlphaSelect",
+                "deep",
+                explorer,
+                "ListviewAlphaSelect",
+                0,
+            ),
+            ("listviewShadow", "deep", explorer, "ListviewShadow", 0),
+            (
+                "chromeNetworkPrediction",
+                "browser",
+                r"Software\Policies\Google\Chrome",
+                "NetworkPredictionOptions",
+                2,
+            ),
+            (
+                "edgeNetworkPrediction",
+                "browser",
+                r"Software\Policies\Microsoft\Edge",
+                "NetworkPredictionOptions",
+                2,
+            ),
+            (
+                "braveNetworkPrediction",
+                "browser",
+                r"Software\Policies\BraveSoftware\Brave",
+                "NetworkPredictionOptions",
+                2,
+            ),
+        ];
+        assert_eq!(SPECS.len(), 7 + expected.len());
+        assert_eq!(
+            SPECS.iter().map(|s| s.id).collect::<HashSet<_>>().len(),
+            SPECS.len()
+        );
+        for (spec, (id, area, subkey, name, value)) in SPECS[7..].iter().zip(expected) {
+            assert_eq!(
+                (spec.id, spec.area, spec.subkey, spec.name),
+                (id, area, subkey, name)
+            );
+            assert_eq!(spec.target(), RawValue::dword(value));
+        }
+        assert!(SPECS
+            .iter()
+            .all(|s| s.name != "UserPreferencesMask" && s.id != "mouseShadow"));
+    }
+
+    #[test]
+    fn new_targets_backup_exact_undo_and_detect_type_and_byte_changes() {
+        for spec in &SPECS[7..] {
+            // Test both absence and exact raw data, without touching the registry.
+            for previous in [
+                None,
+                Some(RawValue {
+                    vtype: 3,
+                    bytes: vec![7, 0, 255, 8],
+                }),
+            ] {
+                let journal = MemoryJournal::default();
+                let registry = FakeRegistry::new(&journal);
+                if let Some(value) = &previous {
+                    registry.values.borrow_mut().insert(spec.id, value.clone());
+                }
+                let items = list_with(&registry);
+                let selection = vec![spec.id.to_owned()];
+                let report = apply_with(&items, &selection, &registry, &journal).unwrap();
+                assert_eq!((report.done, report.failed), (1, 0));
+                assert_eq!(&journal.events.borrow()[..2], &["backup", "write"]);
+                assert_eq!(registry.read(spec).unwrap(), Some(spec.target()));
+                match &journal.undo.borrow()[0] {
+                    UndoOp::RestoreRegistryValue {
+                        machine,
+                        subkey,
+                        name,
+                        previous: saved,
+                    } => {
+                        assert!(!machine);
+                        assert_eq!(
+                            (subkey.as_str(), name.as_str(), saved),
+                            (spec.subkey, spec.name, &previous)
+                        );
+                        assert_eq!(
+                            registry.replace(spec, Some(&spec.target()), saved.as_ref()),
+                            WriteOutcome::Written
+                        );
+                    }
+                    _ => panic!("wrong undo"),
+                }
+                assert_eq!(registry.read(spec).unwrap(), previous);
+            }
+            for after_backup in [false, true] {
+                let journal = MemoryJournal::default();
+                let registry = FakeRegistry::new(&journal);
+                let items = list_with(&registry);
+                let foreign = RawValue::sz("third party");
+                if after_backup {
+                    let values = registry.values.clone();
+                    let foreign = foreign.clone();
+                    *journal.change_on_save.borrow_mut() = Some(Box::new(move || {
+                        values.borrow_mut().insert(spec.id, foreign.clone());
+                    }));
+                } else {
+                    registry
+                        .values
+                        .borrow_mut()
+                        .insert(spec.id, foreign.clone());
+                }
+                let report = apply_with(&items, &[spec.id.into()], &registry, &journal).unwrap();
+                assert_eq!(
+                    (report.done, report.failed, registry.writes.get()),
+                    (0, 1, 0)
+                );
+                assert_eq!(registry.read(spec).unwrap(), Some(foreign));
+                assert!(journal.undo.borrow().is_empty());
+            }
+            let journal = MemoryJournal::default();
+            let registry = FakeRegistry::new(&journal);
+            for wrong in [
+                RawValue {
+                    vtype: 3,
+                    bytes: spec.target().bytes,
+                },
+                RawValue {
+                    vtype: 4,
+                    bytes: vec![0, 0, 0],
+                },
+                RawValue::dword(99),
+            ] {
+                registry.values.borrow_mut().insert(spec.id, wrong);
+                assert!(
+                    !list_with(&registry)
+                        .iter()
+                        .find(|t| t.id == spec.id)
+                        .unwrap()
+                        .active
+                );
+            }
+            registry.values.borrow_mut().insert(spec.id, spec.target());
+            let active = list_with(&registry);
+            assert!(active.iter().find(|t| t.id == spec.id).unwrap().active);
+            let report = apply_with(&active, &[spec.id.into()], &registry, &journal).unwrap();
+            assert_eq!((report.done, report.failed, report.record_id), (0, 0, None));
+            assert_eq!(registry.writes.get(), 0);
+        }
+    }
+
+    #[test]
+    fn new_network_policies_remain_blocked_by_machine_policy_and_backup_failures() {
+        for spec in &SPECS[7..] {
+            let journal = MemoryJournal::default();
+            let registry = FakeRegistry::new(&journal);
+            let items = list_with(&registry);
+            if spec.area == "browser" {
+                registry.policy.set(true);
+                assert_eq!(
+                    list_with(&registry)
+                        .iter()
+                        .find(|t| t.id == spec.id)
+                        .unwrap()
+                        .reason
+                        .as_deref(),
+                    Some("machine_policy")
+                );
+                assert!(apply_with(&items, &[spec.id.into()], &registry, &journal).is_err());
+                registry.policy.set(false);
+                registry.policy_error.set(true);
+                assert!(apply_with(&items, &[spec.id.into()], &registry, &journal).is_err());
+                registry.policy_error.set(false);
+            }
+            journal.fail_at.set(Some(1));
+            assert!(apply_with(&items, &[spec.id.into()], &registry, &journal).is_err());
+            assert_eq!(registry.writes.get(), 0);
+        }
     }
 
     #[test]
@@ -2137,6 +2586,321 @@ mod tests {
             validate_cache(cache).unwrap();
             assert!(serde_json::to_value(cache).unwrap().get("proof").is_none());
         }
+    }
+
+    #[test]
+    fn app_cache_allowlist_is_exact_separate_and_reuses_verified_history() {
+        let fixture = Fixture::new();
+        let expected = [
+            ("vscode", "Code", "Code.exe"),
+            ("discord", "discord", "discord.exe"),
+            ("slack", "Slack", "slack.exe"),
+        ];
+        let forbidden = [
+            "Local Storage",
+            "IndexedDB",
+            "settings",
+            "settings.json",
+            "extensions",
+            "documents",
+        ];
+        let mut private = Vec::new();
+        let mut expected_ids = HashSet::new();
+        for (app, (id, directory, exe)) in APPLICATIONS.iter().zip(expected) {
+            assert_eq!(
+                (app.id, app.data, app.executable),
+                (id, &[directory][..], exe)
+            );
+            for sibling in forbidden {
+                private.push(fixture.file(&format!("{directory}/{sibling}/private"), b"private"));
+            }
+            private.push(fixture.file(&format!("{directory}/User/Cache/private"), b"private"));
+            private.push(fixture.file(&format!("{directory}/Default/Cache/private"), b"private"));
+            private.push(fixture.file(&format!("Local/{directory}/Cache/private"), b"private"));
+            for kind in ["Cache", "Code Cache", "GPUCache"] {
+                fixture.file(&format!("{directory}/{kind}/nested/payload"), b"123");
+                expected_ids.insert(format!("{id}:{kind}"));
+                for sibling in forbidden {
+                    private.push(
+                        fixture.file(&format!("{directory}/{kind}/{sibling}/private"), b"private"),
+                    );
+                }
+            }
+        }
+        let browser = fixture.file("Google/Chrome/User Data/Default/Cache/browser", b"browser");
+        let scan = fixture.app_scan();
+        assert_eq!(
+            cache_ids(&scan).into_iter().collect::<HashSet<_>>(),
+            expected_ids
+        );
+        assert_eq!(scan.caches.len(), 9);
+        assert_eq!(scan.caches.iter().map(|c| c.bytes).sum::<u64>(), 27);
+        assert_eq!(scan.skipped, 54);
+        let browsers = fixture.scan();
+        assert_eq!(cache_ids(&browsers), ["chrome:Default:Cache"]);
+        let journal = MemoryJournal::default();
+        let calls = Cell::new(0);
+        let report = clear_verified_with(
+            &scan.caches,
+            &cache_ids(&scan),
+            &journal,
+            &AtomicBool::new(false),
+            &|_| Ok(false),
+            &|proof, file, guards, _| {
+                assert!(!guards.is_empty());
+                assert!(proof.profile.is_none());
+                assert!(file.path.starts_with(&proof.root));
+                assert_eq!(&*journal.title.borrow(), "browserCache");
+                assert!(journal.saves.get() > 0);
+                calls.set(calls.get() + 1);
+                fs::rename(
+                    &file.path,
+                    fixture
+                        .root
+                        .join(format!("fixture-recycled-{}", calls.get())),
+                )
+                .map_err(|e| e.to_string())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (report.done, report.failed, report.bytes, calls.get()),
+            (9, 0, 27, 9)
+        );
+        assert!(journal.undo.borrow().is_empty());
+        for cache in &scan.caches {
+            validate_cache(cache).unwrap();
+            assert!(cache.proof.root.is_dir());
+            assert!(serde_json::to_value(cache).unwrap().get("proof").is_none());
+        }
+        assert!(browser.is_file());
+        for path in private {
+            assert_eq!(fs::read(path).unwrap(), b"private");
+        }
+    }
+
+    #[test]
+    fn every_app_cache_blocks_running_or_uninspectable_processes() {
+        for app in &APPLICATIONS {
+            let fixture = Fixture::new();
+            assert!(matching_image(
+                app,
+                &fixture.root.join(app.executable.to_ascii_uppercase())
+            ));
+            assert!(!matching_image(app, Path::new(app.executable)));
+            assert!(!matching_image(
+                app,
+                &fixture.root.join(format!("not{}", app.executable))
+            ));
+            for kind in cache_kinds(app) {
+                let path = fixture.file(&format!("{}/{kind}/payload", app.data[0]), b"cache");
+                let scan = fixture.app_scan();
+                let id = format!("{}:{kind}", app.id);
+                for unreadable in [false, true] {
+                    for block_at in [1, 3] {
+                        // preflight and after durable history flush
+                        let journal = MemoryJournal::default();
+                        let checks = Cell::new(0);
+                        let result = clear_with(
+                            &scan.caches,
+                            &[id.clone()],
+                            &journal,
+                            &AtomicBool::new(false),
+                            &|checked| {
+                                assert!(std::ptr::eq(app, checked));
+                                checks.set(checks.get() + 1);
+                                if checks.get() < block_at {
+                                    return Ok(false);
+                                }
+                                if unreadable {
+                                    Err("process_unreadable".into())
+                                } else {
+                                    Ok(true)
+                                }
+                            },
+                            &|_| panic!("running or uninspectable app must not recycle"),
+                        );
+                        assert_eq!(
+                            result.unwrap_err(),
+                            if unreadable {
+                                "process_unreadable"
+                            } else {
+                                "browser_running"
+                            }
+                        );
+                        assert_eq!(journal.saves.get(), if block_at == 1 { 0 } else { 1 });
+                        assert_eq!(fs::read(&path).unwrap(), b"cache");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_app_cache_rejects_reparse_roots_parents_and_children() {
+        for app in &APPLICATIONS {
+            for kind in cache_kinds(app) {
+                for level in ["app", "root", "child"] {
+                    let fixture = Fixture::new();
+                    let private = fixture.file(&format!("outside/{kind}/private"), b"private");
+                    let target = fixture.root.join("outside");
+                    let data = fixture.root.join(app.data[0]);
+                    let root = data.join(kind);
+                    let alias = match level {
+                        "app" => data,
+                        "root" => root,
+                        _ => root.join("linked"),
+                    };
+                    fs::create_dir_all(alias.parent().unwrap()).unwrap();
+                    fixture.directory_alias(&alias, &target);
+                    let scan = app_scan_at(
+                        &fixture.root,
+                        &AtomicBool::new(false),
+                        &|path, _| {
+                            assert!(!path.starts_with(&alias.join(kind)));
+                        },
+                        LIMITS,
+                    )
+                    .unwrap();
+                    assert!(scan.caches.is_empty(), "{} {kind} {level}", app.id);
+                    assert!(scan.skipped >= 1);
+                    assert_eq!(fs::read(private).unwrap(), b"private");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_app_cache_rejects_hardlinks_forged_scopes_and_ads_names() {
+        let fixture = Fixture::new();
+        let private = fixture.file("outside/private", b"private");
+        for app in &APPLICATIONS {
+            for kind in cache_kinds(app) {
+                let root = join_parts(&fixture.root, app.data).join(kind);
+                fs::create_dir_all(&root).unwrap();
+                fs::hard_link(&private, root.join("linked")).unwrap();
+            }
+        }
+        let scan = fixture.app_scan();
+        assert!(scan.caches.is_empty());
+        assert_eq!(scan.skipped, 9);
+        for app in &APPLICATIONS {
+            for kind in cache_kinds(app) {
+                fixture.file(&format!("{}/{kind}/payload", app.data[0]), b"cache");
+            }
+        }
+        for cache in fixture.app_scan().caches {
+            for variant in 0..7 {
+                let mut forged = cache.clone();
+                match variant {
+                    0 => forged.proof.files[0].path = private.clone(),
+                    1 => forged.proof.files[0].path = forged.proof.root.join("payload:stream"),
+                    2 => forged.proof.kind = "Local Storage",
+                    3 => forged.proof.profile = Some("Default".into()),
+                    4 => forged.proof.root = forged.proof.root.with_file_name("IndexedDB"),
+                    5 => {
+                        forged.id.push_str(":forged");
+                        forged.proof.id = forged.id.clone();
+                    }
+                    _ => forged.browser = "chrome",
+                }
+                let id = forged.id.clone();
+                assert!(clear_with(
+                    &[forged],
+                    &[id],
+                    &MemoryJournal::default(),
+                    &AtomicBool::new(false),
+                    &|_| panic!("invalid proof must precede process checks"),
+                    &|_| panic!("invalid proof must not recycle")
+                )
+                .is_err());
+            }
+        }
+        assert_eq!(fs::read(private).unwrap(), b"private");
+    }
+
+    #[test]
+    fn every_app_cache_revalidates_changed_files_and_replaced_ancestors() {
+        for app in &APPLICATIONS {
+            for kind in cache_kinds(app) {
+                for change in ["file", "app", "root", "parent", "reparse"] {
+                    let fixture = Fixture::new();
+                    let file =
+                        fixture.file(&format!("{}/{kind}/nested/payload", app.data[0]), b"cache");
+                    let scan = fixture.app_scan();
+                    if change == "file" {
+                        fs::write(&file, b"changed length").unwrap();
+                    } else {
+                        let replaced = match change {
+                            "app" => fixture.root.join(app.data[0]),
+                            "root" | "reparse" => {
+                                file.parent().unwrap().parent().unwrap().to_path_buf()
+                            }
+                            _ => file.parent().unwrap().to_path_buf(),
+                        };
+                        let moved = fixture.root.join("old-directory");
+                        fs::rename(&replaced, &moved).unwrap();
+                        if change == "reparse" {
+                            fixture.directory_alias(&replaced, &moved);
+                        } else {
+                            fs::create_dir_all(file.parent().unwrap()).unwrap();
+                            fs::write(&file, b"cache").unwrap();
+                        }
+                    }
+                    let report = clear_with(
+                        &scan.caches,
+                        &cache_ids(&scan),
+                        &MemoryJournal::default(),
+                        &AtomicBool::new(false),
+                        &|_| Ok(false),
+                        &|_| panic!("changed proof must not recycle"),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        (report.done, report.failed),
+                        (0, 1),
+                        "{} {kind} {change}",
+                        app.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn app_scan_limits_progress_and_cancellation_share_the_browser_budget() {
+        let fixture = Fixture::new();
+        for name in ["a", "b", "c"] {
+            fixture.file(&format!("Code/Cache/{name}"), b"cache");
+        }
+        let scan = app_scan_at(
+            &fixture.root,
+            &AtomicBool::new(false),
+            &|_, _| {},
+            Limits { files: 1, ..LIMITS },
+        )
+        .unwrap();
+        assert_eq!(scan.caches.iter().map(|c| c.files).sum::<u64>(), 1);
+        assert_eq!(scan.skipped, 1);
+        let cancel = AtomicBool::new(false);
+        let scan = app_scan_at(
+            &fixture.root,
+            &cancel,
+            &|_, _| {
+                cancel.store(true, Ordering::Relaxed);
+            },
+            LIMITS,
+        )
+        .unwrap();
+        assert!(scan.cancelled && scan.caches.is_empty());
+        let scan = app_scan_at(
+            &fixture.root.join("missing"),
+            &AtomicBool::new(true),
+            &|_, _| panic!("cancelled"),
+            LIMITS,
+        )
+        .unwrap();
+        assert!(scan.cancelled && scan.caches.is_empty());
     }
 
     #[test]

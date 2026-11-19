@@ -60,6 +60,10 @@ export interface AppInfo {
   /** YYYY-MM-DD */
   installDate: string | null;
   size: number | null;
+  /** Last observed use, Unix seconds; null means unknown, not unused. */
+  lastUsed: number | null;
+  /** Peer app IDs installed on the same date; a weak signal, not proof of bundling. */
+  installedTogether: string[];
   installLocation: string | null;
   needsAdmin: boolean;
 }
@@ -237,7 +241,7 @@ export interface TweakReport {
 
 export interface BrowserCache {
   id: string;
-  browser: 'chrome' | 'edge' | 'brave' | 'firefox';
+  browser: 'chrome' | 'edge' | 'brave' | 'firefox' | 'vscode' | 'discord' | 'slack';
   path: string;
   bytes: number;
   files: number;
@@ -280,23 +284,34 @@ export interface MonitorReport {
   truncated: boolean;
 }
 
+const pendingMaintenance = new Map<string, { cancelled: boolean }>();
+
 async function maintenanceWork<T>(
   command: string,
   payload: Record<string, unknown>,
   requestId: string,
   onProgress: (path: string, count: number) => void,
 ): Promise<T> {
-  const unlisten = await listen<{ requestId: string; path: string; count: number }>('maintenance-progress', (e) => {
-    if (e.payload.requestId === requestId) onProgress(e.payload.path, e.payload.count);
-  });
+  const pending = { cancelled: false };
+  pendingMaintenance.set(requestId, pending);
+  let unlisten: (() => void) | undefined;
   try {
+    unlisten = await listen<{ requestId: string; path: string; count: number }>('maintenance-progress', (e) => {
+      if (e.payload.requestId === requestId) onProgress(e.payload.path, e.payload.count);
+    });
+    if (pending.cancelled) throw 'cancelled';
     return await invoke<T>(command, { ...payload, requestId });
   } finally {
-    unlisten();
+    pendingMaintenance.delete(requestId);
+    unlisten?.();
   }
 }
 
-export const maintenanceCancel = (requestId: string) => invoke<void>('maintenance_cancel', { requestId });
+export const maintenanceCancel = (requestId: string) => {
+  const pending = pendingMaintenance.get(requestId);
+  if (pending) pending.cancelled = true;
+  return invoke<void>('maintenance_cancel', { requestId });
+};
 export const duplicateScan = (root: string, minMb: number, requestId: string, progress: (path: string, count: number) => void) =>
   maintenanceWork<DuplicateScan>('duplicate_scan', { root, minMb }, requestId, progress);
 export const duplicateRecycle = (ids: string[], requestId: string) => invoke<DuplicateRemoval>('duplicate_recycle', { ids, requestId });
@@ -311,6 +326,40 @@ export const browserCacheScan = (requestId: string, progress: (path: string, cou
   maintenanceWork<BrowserCacheScan>('browser_cache_scan', {}, requestId, progress);
 export const browserCacheClear = (ids: string[], requestId: string) => invoke<BrowserCacheReport>('browser_cache_clear', { ids, requestId });
 export const browserCacheReveal = (id: string) => invoke<void>('browser_cache_reveal', { id });
+export const appCacheScan = (requestId: string, progress: (path: string, count: number) => void) =>
+  maintenanceWork<BrowserCacheScan>('app_cache_scan', {}, requestId, progress);
+export const appCacheClear = (ids: string[], requestId: string) => invoke<BrowserCacheReport>('app_cache_clear', { ids, requestId });
+export const appCacheReveal = (id: string) => invoke<void>('app_cache_reveal', { id });
+
+export interface Extension {
+  id: string;
+  browser: string;
+  profile: string;
+  name: string;
+  version: string;
+  enabled: boolean | null;
+  managed: boolean;
+  permissions: string[];
+  /** Measured lower bound, not CPU/RAM; zero means unmeasured. */
+  bytes: number;
+}
+export interface ExtensionScan {
+  extensions: Extension[];
+  skipped: number;
+  truncated: boolean;
+}
+export interface InstalledUpdate {
+  id: string;
+  title: string;
+  kb: string[];
+  uninstallable: boolean;
+}
+export const extensionsList = () => invoke<ExtensionScan>('extensions_list');
+/** Returns a fixed internal URI; does not launch a browser or change extensions. */
+export const extensionManager = (browser: string) => invoke<string>('extension_manager', { browser });
+export const windowsUpdatesList = (requestId: string) => invoke<InstalledUpdate[]>('windows_updates_list', { requestId });
+/** Opens only the Windows installed-update removal page. */
+export const windowsUpdatesOpen = () => invoke<void>('windows_updates_open');
 export const browserFlushDns = () => invoke<void>('browser_flush_dns');
 export const browserNetwork = () => invoke<void>('browser_network');
 export const monitorList = () => invoke<MonitorSummary[]>('monitor_list');
