@@ -6,7 +6,8 @@ import { mockIPC } from '@tauri-apps/api/mocks';
 import { MODULES, type Finding, type FixReport, type ModuleId, type RescueRecord, type ScanReport } from '../lib/scan';
 import type { AppInfo, BatchUninstallReport, Leftover, RemoveReport, UninstallMode, UninstallPreparation, UninstallResult,
   DuplicateGroup, DuplicateScan, DuplicateRemoval, ComponentAnalysis, ComponentStatus, Tweak, TweakReport,
-  BrowserCache, BrowserCacheScan, BrowserCacheReport, MonitorSummary, MonitorReport, MonitorChange, ExtensionScan, InstalledUpdate } from '../lib/tools';
+  BrowserCache, BrowserCacheScan, BrowserCacheReport, MonitorSummary, MonitorReport, MonitorChange, ReviewExtensionScan, InstalledUpdate,
+  BrowserExtension, ExtensionScan, ExtensionRemoval, WindowsUpdate, UpdateResult } from '../lib/tools';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -89,7 +90,10 @@ const apps: AppInfo[] = [
   { id: 'store|Microsoft.WindowsCalculator_8wekyb3d8bbwe', kind: 'store', builtIn: true, removable: true, name: 'Windows Calculator', publisher: 'Microsoft Corporation', version: '11.2409.1.0', installDate: dateAgo(120), size: 32e6, lastUsed: null, installedTogether: [], installLocation: 'C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator', needsAdmin: false },
   { id: 'store|SpotifyAB.SpotifyMusic_zpdnekdrzrea0', kind: 'store', builtIn: false, removable: true, name: 'Spotify', publisher: 'Spotify AB', version: '1.260.0.0', installDate: dateAgo(7), size: 290e6, lastUsed: usageNow - 86400, installedTogether: ['HKCU\\c'], installLocation: 'C:\\Program Files\\WindowsApps\\SpotifyAB.SpotifyMusic', needsAdmin: false },
   { id: 'store|Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy', kind: 'store', builtIn: true, removable: false, name: 'Windows Shell Experience Host', publisher: 'Microsoft Corporation', version: '10.0.19041.1', installDate: null, size: null, lastUsed: null, installedTogether: [], installLocation: 'C:\\Windows\\SystemApps\\ShellExperienceHost', needsAdmin: false },
-];
+  { id: 'HKLM\\d', kind: 'desktop', builtIn: false, removable: true, name: 'Free Video Player', publisher: 'Player Labs', version: '3.4', installDate: '2026-11-15', size: 88e6, installLocation: 'C:\\Program Files\\Free Video Player', needsAdmin: true, installedAt: 1_794_738_000, companions: ['Search Toolbar Helper'] },
+  { id: 'HKLM\\e', kind: 'desktop', builtIn: false, removable: true, name: 'Search Toolbar Helper', publisher: 'Deal Search Ltd.', version: '1.0.7', installDate: '2026-11-15', size: 4.1e6, installLocation: 'C:\\Program Files (x86)\\Search Toolbar Helper', needsAdmin: true, installedAt: 1_794_738_090, companions: ['Free Video Player'] },
+].map((app) => ({ installedAt: null, companions: [], lastUsed: null, installedTogether: [], ...app }) as AppInfo)
+  .filter((app) => !['HKLM\\d', 'HKLM\\e'].includes(app.id) || new URLSearchParams(window.location.search).get('companions') === '1');
 // This set models only the current user's installed apps; other users/provisioning are untouched.
 const installedApps = new Set(apps.map((app) => app.id));
 const forceTargets = new Map<string, AppInfo>();
@@ -192,7 +196,7 @@ function makeForceTarget(name: string, inputPath: string): AppInfo {
     return lower === other || lower.startsWith(`${other}\\`) || other.startsWith(`${lower}\\`);
   })) throw 'shared_force_target';
   const id = `force|${lower}`;
-  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, lastUsed: null, installedTogether: [], installLocation: path, needsAdmin: false };
+  const target: AppInfo = { id, kind: 'desktop', builtIn: false, removable: true, name, publisher: null, version: null, installDate: null, size: null, lastUsed: null, installedTogether: [], installLocation: path, needsAdmin: false, installedAt: null, companions: [] };
   forceTargets.set(id, target);
   return { ...target };
 }
@@ -402,8 +406,102 @@ function selectedIds(value: unknown): string[] {
   if (value.some((id) => typeof id !== 'string') || new Set(value).size !== value.length) throw 'invalid_request';
   return value as string[];
 }
+const extensionItems: BrowserExtension[] = [
+  { id: 'chrome|Default|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', browser: 'chrome', profile: 'Default', extensionId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'Deal Search Toolbar', version: '1.0.7', source: 'external', enabled: true, removal: 'registry', registry: ['HKLM\\SOFTWARE\\WOW6432Node\\Google\\Chrome\\Extensions\\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], needsAdmin: true },
+  { id: 'chrome|Profile 1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', browser: 'chrome', profile: 'Profile 1', extensionId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'Deal Search Toolbar', version: '1.0.7', source: 'external', enabled: false, removal: 'registry', registry: ['HKLM\\SOFTWARE\\WOW6432Node\\Google\\Chrome\\Extensions\\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], needsAdmin: true },
+  { id: 'chrome|Default|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', browser: 'chrome', profile: 'Default', extensionId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', name: 'Ad Blocker', version: '4.2.0', source: 'store', enabled: true, removal: 'browser', registry: [], needsAdmin: false },
+  { id: 'edge|Default|cccccccccccccccccccccccccccccccc', browser: 'edge', profile: 'Default', extensionId: 'cccccccccccccccccccccccccccccccc', name: 'Company Password Manager', version: '9.1', source: 'policy', enabled: true, removal: 'none', registry: [], needsAdmin: false },
+  { id: 'edge|-|dddddddddddddddddddddddddddddddd', browser: 'edge', profile: null, extensionId: 'dddddddddddddddddddddddddddddddd', name: 'dddddddddddddddddddddddddddddddd', version: null, source: 'external', enabled: null, removal: 'registry', registry: ['HKCU\\SOFTWARE\\Microsoft\\Edge\\Extensions\\dddddddddddddddddddddddddddddddd'], needsAdmin: false },
+  { id: 'firefox|ab12.default-release|blocker@example', browser: 'firefox', profile: 'ab12.default-release', extensionId: 'blocker@example', name: 'Tracker Blocker', version: '2.3', source: 'store', enabled: true, removal: 'browser', registry: [], needsAdmin: false },
+];
+let extensionCache: BrowserExtension[] | null = null;
+const windowsUpdates: WindowsUpdate[] = [
+  { id: 'KB5126256', description: 'Security Update', installedOn: '2026-11-12' },
+  { id: 'KB5075039', description: 'Update', installedOn: '2026-10-08' },
+  { id: 'KB5072653', description: 'Security Update', installedOn: '2026-09-10' },
+  { id: 'KB5000099', description: 'Hotfix', installedOn: null },
+];
+let updateCache: WindowsUpdate[] = [];
+let updatePreparation: { id: string; ready: boolean; restoreError: string | null } | null = null;
+let updateWait: { cancelled: boolean } | null = null;
+
+async function listExtensions(): Promise<ExtensionScan> {
+  return toolWork(async () => {
+    await sleep(450);
+    extensionCache = structuredClone(extensionItems);
+    return { extensions: structuredClone(extensionItems), skipped: 1 };
+  });
+}
+
+async function removeExtensions(ids: unknown): Promise<ExtensionRemoval> {
+  return toolWork(async () => {
+    const cache = extensionCache;
+    if (!cache || !Array.isArray(ids) || !ids.length) throw 'not_found';
+    const picked = ids.map((id) => cache.find((e) => e.id === id));
+    if (picked.some((e) => !e)) throw 'not_found';
+    if (picked.some((e) => e!.removal !== 'registry')) throw 'protected_app';
+    await sleep(500);
+    const paths = [...new Set(picked.flatMap((e) => e!.registry))];
+    const failedPaths = paths.filter((path) => path.startsWith('HKLM') && new URLSearchParams(window.location.search).get('admin') !== '1');
+    const donePaths = paths.filter((path) => !failedPaths.includes(path));
+    for (let i = extensionItems.length - 1; i >= 0; i--) {
+      if (extensionItems[i].registry.some((path) => donePaths.includes(path))) extensionItems.splice(i, 1);
+    }
+    extensionCache = null;
+    const recordId = donePaths.length ? ++recordNumber : null;
+    if (recordId !== null) history.unshift({ id: recordId, time: Math.floor(Date.now() / 1000), modules: [], title: 'browserExtensions', done: donePaths.length, failed: failedPaths.length, bytes: 0, undo: [], undoable: 0, undone: false });
+    return { done: donePaths.length, failed: failedPaths.length, recordId, errors: failedPaths.map((path) => `needs_admin: ${path}`) };
+  });
+}
+
+async function listUpdates(): Promise<WindowsUpdate[]> {
+  return toolWork(async () => {
+    await sleep(600);
+    updatePreparation = null;
+    updateCache = structuredClone(windowsUpdates);
+    return structuredClone(windowsUpdates);
+  });
+}
+
+async function prepareUpdate(id: unknown, continueWithoutRestore: boolean) {
+  if (toolBusy || nativeWait || updateWait) throw 'busy';
+  if (!updateCache.some((u) => u.id === id)) throw 'not_found';
+  if (continueWithoutRestore) {
+    if (!updatePreparation || updatePreparation.id !== id || updatePreparation.ready || !updatePreparation.restoreError) throw 'restore_required';
+    updatePreparation.ready = true;
+    return { ready: true, restoreError: updatePreparation.restoreError };
+  }
+  return toolWork(async () => {
+    await sleep(600);
+    const restoreError = restoreFailure();
+    updatePreparation = { id: id as string, ready: !restoreError, restoreError };
+    return { ready: !restoreError, restoreError };
+  });
+}
+
+async function uninstallUpdate(id: unknown): Promise<UpdateResult> {
+  if (toolBusy || nativeWait || updateWait) throw 'busy';
+  if (!updateCache.some((u) => u.id === id)) throw 'not_found';
+  if (!updatePreparation || !updatePreparation.ready || updatePreparation.id !== id) throw 'restore_required';
+  updatePreparation = null;
+  const wait = { cancelled: false };
+  updateWait = wait;
+  try {
+    for (let i = 0; i < 12 && !wait.cancelled; i++) await sleep(150);
+    if (wait.cancelled) return { exitCode: null, restartRequired: false, stillInstalled: true };
+    // ?wu=fail mô phỏng bản tích lũy không gỡ được; mặc định cần khởi động lại.
+    const option = new URLSearchParams(window.location.search).get('wu');
+    const exitCode = option === 'fail' ? 0x80070057 : option === 'cancel' ? 1223 : 3010;
+    const result = { exitCode, restartRequired: exitCode === 3010, stillInstalled: true };
+    history.unshift({ id: ++recordNumber, time: Math.floor(Date.now() / 1000), modules: [], title: `windowsUpdate:${id}`, done: result.restartRequired ? 1 : 0, failed: result.restartRequired ? 0 : 1, bytes: 0, undo: [], undoable: 0, undone: false });
+    return result;
+  } finally {
+    updateWait = null;
+  }
+}
+
 async function toolWork<T>(work: () => Promise<T>): Promise<T> {
-  if (toolBusy || nativeWait) throw 'busy';
+  if (toolBusy || nativeWait || updateWait) throw 'busy';
   toolBusy = true;
   try { return await work(); }
   finally { toolBusy = false; }
@@ -651,12 +749,12 @@ function revealCache(id: unknown, scope: CacheScope): Promise<void> {
 }
 
 // Entirely fake review fixtures. Opening a manager never mutates these inventories.
-function listExtensions(): Promise<ExtensionScan> {
+function listReviewExtensions(): Promise<ReviewExtensionScan> {
   return toolWork(async () => {
     await sleep(500);
     if (option('review') === 'error') throw 'review_failed';
     // Native inventory treats managed as managed OR unverified; Chromium enabled state is unknown.
-    const result: ExtensionScan = { skipped: 0, truncated: false, extensions: [
+    const result: ReviewExtensionScan = { skipped: 0, truncated: false, extensions: [
       { id: 'fixture-reader', browser: 'chrome', profile: 'Default', name: 'Demo Reader (fixture)', version: '1.0', enabled: null, managed: true, permissions: ['storage', 'activeTab'], bytes: 4e6 },
       { id: 'fixture-reader', browser: 'chrome', profile: 'Profile 1', name: 'Demo Reader (fixture)', version: '1.0', enabled: null, managed: true, permissions: ['storage', 'activeTab'], bytes: 4e6 },
       { id: 'fixture-managed', browser: 'edge', profile: 'Default', name: 'Organization Helper (fixture)', version: '2.1', enabled: null, managed: true, permissions: ['tabs', 'https://example.invalid/*'], bytes: 8e6 },
@@ -677,7 +775,7 @@ function managerAddress(browser: unknown): Promise<string> {
     return uri; // No launch and no extension removal, even in mocks.
   });
 }
-function listUpdates(args: Record<string, unknown>): Promise<InstalledUpdate[]> {
+function listReviewUpdates(args: Record<string, unknown>): Promise<InstalledUpdate[]> {
   return maintenanceWork(args.requestId, async (job) => {
     for (let n = 0; n < 8; n++) { await sleep(100); if (job.cancelled) throw 'cancelled'; }
     // This DTO cannot represent partial inventory: fail closed rather than claim completeness.
@@ -790,9 +888,9 @@ export function install(): void {
         case 'app_cache_scan': return scanCaches(args, 'apps');
         case 'app_cache_clear': return clearCaches(args, 'apps');
         case 'app_cache_reveal': return revealCache(args.id, 'apps');
-        case 'extensions_list': return listExtensions();
+        case 'review_extensions_list': return listReviewExtensions();
         case 'extension_manager': return managerAddress(args.browser);
-        case 'windows_updates_list': return listUpdates(args);
+        case 'windows_updates_list': return listReviewUpdates(args);
         case 'windows_updates_open': return toolWork(async () => {
           if (option('review') === 'error') throw 'review_failed';
           // Fake handoff only. No live Settings launch, mutation or removal record.
@@ -821,7 +919,20 @@ export function install(): void {
         case 'cancel':
           cancelled = true;
           if (nativeWait) nativeWait.cancelled = true;
+          if (updateWait) updateWait.cancelled = true;
           return;
+        case 'extensions_list': return listExtensions();
+        case 'extensions_remove': return removeExtensions(args.ids);
+        case 'extension_manage': {
+          const item = extensionCache?.find((e) => e.id === args.id);
+          if (!item) throw 'not_found';
+          if (item.removal !== 'browser') throw 'protected_app';
+          return;
+        }
+        case 'updates_list': return listUpdates();
+        case 'update_prepare': return prepareUpdate(args.id, args.continueWithoutRestore === true);
+        case 'update_uninstall': return uninstallUpdate(args.id);
+        case 'updates_history': return;
         case 'fix':
           return toolWork(() => fix(args.ids as string[]));
         case 'advise': {

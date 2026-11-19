@@ -3,11 +3,11 @@
   import { t, tOr } from '../i18n.svelte';
   import { formatBytes, formatCount } from '../format';
   import { inTauri } from '../tauri';
-  import { extensionsList, extensionManager, windowsUpdatesList, windowsUpdatesOpen, maintenanceCancel,
-    type Extension, type ExtensionScan, type InstalledUpdate } from '../tools';
+  import { reviewExtensionsList, extensionManager, windowsUpdatesList, windowsUpdatesOpen, maintenanceCancel,
+    type Extension, type ReviewExtensionScan, type InstalledUpdate } from '../tools';
 
   let { area }: { area: 'extensions' | 'updates' } = $props();
-  let extensions = $state<ExtensionScan | null>(null);
+  let extensions = $state<ReviewExtensionScan | null>(null);
   let updates = $state<InstalledUpdate[] | null>(null);
   let manager = $state<{ extension: Extension; uri: string } | null>(null);
   let working = $state(false);
@@ -47,7 +47,7 @@
     request = id;
     try {
       if (scope === 'extensions') {
-        const result = await extensionsList();
+        const result = await reviewExtensionsList();
         if (current(version)) extensions = result;
       } else {
         const result = await windowsUpdatesList(id!);

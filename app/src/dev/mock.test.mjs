@@ -28,6 +28,7 @@ test('phase 4 mock contracts are safe and scoped', async (t) => {
     assert.ok(apps.some((a) => a.lastUsed !== null && a.lastUsed < Date.now() / 1000 - 90 * 86400));
     for (const app of apps) {
       assert.ok(Object.hasOwn(app, 'lastUsed') && Array.isArray(app.installedTogether));
+      assert.ok(Object.hasOwn(app, 'installedAt') && Array.isArray(app.companions));
       for (const peer of app.installedTogether) assert.equal(apps.find((a) => a.id === peer).installDate, app.installDate);
     }
     const forced = await tools.forceTarget('Fixture App', 'C:\\Tools\\Fixture App');
@@ -37,7 +38,7 @@ test('phase 4 mock contracts are safe and scoped', async (t) => {
     params();
   });
   await t.test('review handoffs never claim or simulate completed removal', async () => {
-    const before = await tools.extensionsList();
+    const before = await tools.reviewExtensionsList();
     assert.ok(before.extensions.length > 0);
     assert.ok(before.extensions.every((e) => e.managed === true)); // Managed or unverified, not confirmed policy.
     for (const browser of ['chrome', 'edge', 'brave']) {
@@ -52,23 +53,23 @@ test('phase 4 mock contracts are safe and scoped', async (t) => {
     assert.equal(await tools.extensionManager('chrome'), 'chrome://extensions/');
     assert.equal(await tools.extensionManager('firefox'), 'about:addons');
     await rejects(tools.extensionManager('https://example.invalid'), 'unsupported_browser');
-    assert.deepEqual(await tools.extensionsList(), before);
+    assert.deepEqual(await tools.reviewExtensionsList(), before);
     const updates = await tools.windowsUpdatesList(request());
     assert.ok(updates.some((u) => !u.uninstallable));
     await tools.windowsUpdatesOpen();
     assert.deepEqual(await tools.windowsUpdatesList(request()), updates);
     assert.deepEqual(await invoke('rescue_history'), []);
     params('review=partial');
-    const partial = await tools.extensionsList();
+    const partial = await tools.reviewExtensionsList();
     assert.ok(partial.skipped > 0 && partial.truncated);
     await rejects(tools.windowsUpdatesList(request()), 'review_failed');
     params('review=error');
-    await rejects(tools.extensionsList(), 'review_failed');
+    await rejects(tools.reviewExtensionsList(), 'review_failed');
     params();
   });
   await t.test('busy and cancellation are request-owned, not global', async () => {
     const id = request(); const pending = tools.windowsUpdatesList(id);
-    await rejects(tools.extensionsList(), 'busy');
+    await rejects(tools.reviewExtensionsList(), 'busy');
     await rejects(tools.windowsUpdatesOpen(), 'busy');
     await tools.maintenanceCancel(request()); // Another page cannot cancel this request.
     assert.ok((await pending).length > 0);
@@ -86,7 +87,7 @@ test('phase 4 mock contracts are safe and scoped', async (t) => {
       await rejection;
       assert.deepEqual(progress, []);
     }
-    assert.ok((await tools.extensionsList()).extensions.length > 0);
+    assert.ok((await tools.reviewExtensionsList()).extensions.length > 0);
   });
   await t.test('app and browser cache selection cannot cross scopes; open apps block cleanup', async () => {
     const progress = [];
@@ -121,6 +122,31 @@ test('phase 4 mock contracts are safe and scoped', async (t) => {
     assert.deepEqual(await stopped, { done: 0, failed: 0, bytes: 0, recovery: [], cancelled: true, recordId: null });
     await tools.appCacheReveal(appId);
     assert.deepEqual((await tools.browserCacheScan(request(), () => {})).caches, browsers.caches);
+  });
+  await t.test('review and management commands keep separate DTOs and restore sessions', async () => {
+    params();
+    const review = await tools.reviewExtensionsList();
+    const management = await tools.extensionsList();
+    assert.ok(Object.hasOwn(review, 'truncated'));
+    assert.ok(review.extensions.every(e => Array.isArray(e.permissions) && !Object.hasOwn(e, 'removal')));
+    assert.ok(management.extensions.every(e => ['registry', 'browser', 'none'].includes(e.removal) && !Object.hasOwn(e, 'permissions')));
+    await rejects(tools.extensionsRemove([review.extensions[0].id]), 'not_found');
+    const policy = management.extensions.find(e => e.removal === 'none');
+    await rejects(tools.extensionsRemove([policy.id]), 'protected_app');
+    const updates = await tools.updatesList();
+    assert.ok(updates.every(u => Object.hasOwn(u, 'description') && !Object.hasOwn(u, 'uninstallable')));
+    const readOnlyUpdates = await tools.windowsUpdatesList(request());
+    await rejects(tools.updatePrepare(readOnlyUpdates[0].id), 'not_found');
+    await rejects(tools.updateUninstall(updates[0].id), 'restore_required');
+    params('restore=disabled');
+    assert.equal((await tools.updatePrepare(updates[0].id)).ready, false);
+    await rejects(tools.updatePrepare(updates[1].id, true), 'restore_required');
+    assert.equal((await tools.updatePrepare(updates[0].id, true)).ready, true);
+    const result = await tools.updateUninstall(updates[0].id);
+    assert.equal(result.restartRequired, true);
+    await rejects(tools.updateUninstall(updates[0].id), 'restore_required');
+    assert.deepEqual(await tools.reviewExtensionsList(), review);
+    params();
   });
   await t.test('new fixed tweaks use the existing Rescue undo', async () => {
     const ids = ['enableTransparency', 'aeroPeek', 'listviewAlphaSelect', 'listviewShadow'];

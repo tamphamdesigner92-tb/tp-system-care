@@ -1,0 +1,75 @@
+# Phát hành bản mới: tăng "version" trong app/src-tauri/tauri.conf.json, Cargo.toml
+# và app/package.json, commit, rồi đẩy tag cùng số phiên bản, ví dụ:
+#   git tag v0.2.0 && git push origin v0.2.0
+# Workflow build bộ cài NSIS, ký bản cập nhật và tạo GitHub Release kèm latest.json
+# để các máy đã cài tự nhận bản mới.
+#
+# Bật một lần trong Settings → Secrets and variables → Actions của repo:
+#   - Secret TAURI_SIGNING_PRIVATE_KEY: nội dung tệp %USERPROFILE%\.tauri\tp-system-care.key
+#   - Variable RELEASE_ENABLED = true
+# Khi chưa bật, workflow bỏ qua (không build, không đụng tới Release đã có).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    # Chưa có secret khóa ký thì không build: gói cập nhật không ký sẽ bị máy đã cài từ chối.
+    if: ${{ vars.RELEASE_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kiểm tra khóa ký
+        shell: pwsh
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (-not $env:KEY) { throw "Thiếu secret TAURI_SIGNING_PRIVATE_KEY" }
+
+      - name: Kiểm tra tag khớp phiên bản
+        shell: pwsh
+        run: |
+          $version = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} không khớp version $version trong tauri.conf.json"
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Cài gói giao diện
+        working-directory: app
+        run: npm ci
+
+      - name: Kiểm tra
+        run: |
+          cargo test -p tp-core
+          cargo test -p tp-system-care
+          npm --prefix app run check
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: TP System Care ${{ github.ref_name }}
+          releaseBody: Xem thay đổi trong KE_HOACH.md. Máy đã cài sẽ tự nhận bản này.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

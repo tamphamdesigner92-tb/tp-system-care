@@ -157,6 +157,13 @@ mod imp {
             _ => Ok(()),
         }
     }
+
+    /// Thời điểm khóa được ghi lần cuối, tính bằng giây Unix (UTC).
+    pub fn last_write(machine: bool, subkey: &str) -> Option<u64> {
+        let info = hive(machine).open_subkey(subkey).ok()?.query_info().ok()?;
+        let st = info.get_last_write_time_system();
+        super::unix_from_civil(st.wYear as i64, st.wMonth as i64, st.wDay as i64, st.wHour as i64, st.wMinute as i64, st.wSecond as i64)
+    }
 }
 
 #[cfg(not(windows))]
@@ -185,9 +192,28 @@ mod imp {
     pub fn delete_key(_: bool, _: &str) -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
+    pub fn last_write(_: bool, _: &str) -> Option<u64> {
+        None
+    }
 }
 
 pub use imp::*;
+
+/// Đổi ngày giờ UTC sang giây Unix; `None` nếu trước 1970 hoặc không hợp lệ.
+pub(crate) fn unix_from_civil(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> Option<u64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Thuật toán days_from_civil của Howard Hinnant.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second).ok()
+}
 
 /// Ghi lại giá trị cũ, hoặc xóa nếu trước đó không có.
 pub fn restore(machine: bool, subkey: &str, name: &str, previous: Option<&RawValue>) -> Result<(), String> {
@@ -200,6 +226,15 @@ pub fn restore(machine: bool, subkey: &str, name: &str, previous: Option<&RawVal
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn civil_dates_convert_to_unix_seconds() {
+        assert_eq!(unix_from_civil(1970, 1, 1, 0, 0, 0), Some(0));
+        assert_eq!(unix_from_civil(2000, 3, 1, 0, 0, 0), Some(951_868_800));
+        assert_eq!(unix_from_civil(2026, 11, 19, 12, 30, 5), Some(1_795_091_405));
+        assert_eq!(unix_from_civil(1969, 12, 31, 0, 0, 0), None);
+        assert!(last_write(false, "Software").is_some());
+    }
 
     #[test]
     fn raw_value_round_trips() {

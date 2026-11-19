@@ -2,6 +2,8 @@
 //! dụng sạch, Tìm tệp lớn.
 
 pub mod software_review;
+pub mod app_usage;
+pub mod browser_extensions;
 pub mod component_store;
 pub mod duplicates;
 pub(crate) mod verified_recycle;
@@ -12,5 +14,6 @@ pub mod speed;
 pub mod uninstall;
 pub mod store_apps;
 pub mod uninstall_entries;
+pub mod windows_updates;
 
 pub use crate::winutil::recycle;

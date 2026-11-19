@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use tp_core::modules::startup;
-use tp_core::tools::{largefiles, speed, uninstall};
+use tp_core::tools::{browser_extensions, largefiles, speed, uninstall, windows_updates};
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--benchmark") {
@@ -95,6 +95,39 @@ fn main() {
                 l.path
             );
         }
+    }
+
+    let now = tp_core::unix_now();
+    let mut used: Vec<_> = apps.iter().filter_map(|a| Some((a.last_used?, a))).collect();
+    used.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    println!("Có lần mở (UserAssist): {}/{} ứng dụng", used.len(), apps.len());
+    for (t, app) in used.iter().take(5).chain(used.iter().rev().take(3)) {
+        println!("  {:>5} ngày trước  {}", (now - t) / 86_400, app.name);
+    }
+    for app in apps.iter().filter(|a| !a.companions.is_empty()) {
+        println!("Cài cùng lúc: {} ↔ {}", app.name, app.companions.join(", "));
+    }
+
+    let started = std::time::Instant::now();
+    match browser_extensions::list() {
+        Ok(scan) => {
+            println!("Tiện ích trình duyệt: {} ({} hồ sơ không đọc được, {:.1?})", scan.extensions.len(), scan.skipped, started.elapsed());
+            for e in &scan.extensions {
+                println!("  {:<8} {:<22} {:?}/{:?} {:?} {}", e.browser, e.profile.as_deref().unwrap_or("-"), e.source, e.removal, e.enabled, e.name);
+            }
+        }
+        Err(e) => println!("Tiện ích trình duyệt: lỗi {e}"),
+    }
+
+    let started = std::time::Instant::now();
+    match windows_updates::list() {
+        Ok(updates) => {
+            println!("Bản cập nhật Windows: {} ({:.1?})", updates.len(), started.elapsed());
+            for u in updates.iter().take(5) {
+                println!("  {} {:?} {:?}", u.id, u.description, u.installed_on);
+            }
+        }
+        Err(e) => println!("Bản cập nhật Windows: lỗi {e}"),
     }
 
     let started = std::time::Instant::now();

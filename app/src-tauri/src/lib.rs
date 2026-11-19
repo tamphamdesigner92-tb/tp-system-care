@@ -9,6 +9,7 @@ use tp_core::engine::{self, Finding, FixReport, ModuleId, ModuleResult, ScanEven
 use tp_core::rescue::{self, Record, Rescue, UndoReport};
 use tp_core::state::{self, Advice, Health, Store};
 
+mod extras;
 mod maintenance;
 mod tools;
 
@@ -188,6 +189,8 @@ async fn create_restore_point(state: State<'_, AppState>) -> Result<(), String> 
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             findings: Mutex::new(HashMap::new()),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -197,6 +200,7 @@ pub fn run() {
         })
         .manage(tools::ToolState::default())
         .manage(maintenance::MaintenanceState::default())
+        .manage(extras::ExtrasState::default())
         .invoke_handler(tauri::generate_handler![
             is_elevated,
             scan,
@@ -242,14 +246,21 @@ pub fn run() {
             maintenance::app_cache_scan,
             maintenance::app_cache_clear,
             maintenance::app_cache_reveal,
-            maintenance::extensions_list,
+            maintenance::review_extensions_list,
             maintenance::extension_manager,
             maintenance::windows_updates_list,
             maintenance::windows_updates_open,
             maintenance::monitor_list,
             maintenance::monitor_begin,
             maintenance::monitor_finish,
-            maintenance::monitor_detail
+            maintenance::monitor_detail,
+            extras::extensions_list,
+            extras::extensions_remove,
+            extras::extension_manage,
+            extras::updates_list,
+            extras::update_prepare,
+            extras::update_uninstall,
+            extras::updates_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running TP System Care");

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{store_apps, uninstall_entries};
+use super::{app_usage, store_apps, uninstall_entries};
 use crate::modules::startup::{self, parse_command};
 use crate::reg::{self, RawValue};
 use crate::rescue::{self, Rescue, UndoOp};
@@ -62,6 +62,11 @@ pub struct AppInfo {
     pub size: Option<u64>,
     pub install_location: Option<String>,
     pub needs_admin: bool,
+    /// Lần ghi cuối của khóa Uninstall (giây Unix), gần đúng thời điểm cài.
+    pub installed_at: Option<u64>,
+    /// Ứng dụng khác được đăng ký trong cùng khoảng thời gian: có thể là phần mềm
+    /// đi kèm bộ cài. Chỉ là cảnh báo, không bao giờ tự chọn để gỡ.
+    pub companions: Vec<String>,
     #[serde(skip)]
     pub machine: bool,
     #[serde(skip)]
@@ -151,6 +156,8 @@ fn read_app(machine: bool, root: &str, sub: &str) -> Option<AppInfo> {
         size: number(&values, "EstimatedSize").map(|kb| kb as u64 * 1024),
         install_location: text(&values, "InstallLocation").map(|p| p.trim_matches('"').to_string()),
         needs_admin: machine,
+        installed_at: reg::last_write(machine, &key),
+        companions: Vec::new(),
         machine,
         key,
         uninstall,
@@ -194,7 +201,57 @@ fn read_desktop_apps() -> Vec<AppInfo> {
         }
     }
     apps.sort_by_key(|a| a.name.to_lowercase());
+    mark_companions(&mut apps);
     apps
+}
+
+/// Hai ứng dụng được coi là cài cùng lúc khi cùng ngày cài và khóa Uninstall được
+/// ghi cách nhau không quá 5 phút.
+const COMPANION_WINDOW: u64 = 5 * 60;
+/// Nhóm lớn hơn thường là cài đặt hàng loạt của nhà sản xuất máy hoặc công ty.
+const COMPANION_LIMIT: usize = 6;
+/// Thư viện chạy kèm (runtime) thường là phụ thuộc thật của ứng dụng chính.
+const RUNTIME_HINTS: &[&str] = &[
+    "redistributable",
+    "runtime",
+    ".net",
+    "visual c++",
+    "directx",
+    "webview2",
+    "vc_redist",
+];
+
+fn runtime(app: &AppInfo) -> bool {
+    let name = app.name.to_lowercase();
+    RUNTIME_HINTS.iter().any(|hint| name.contains(hint))
+}
+
+/// Ghi tên các ứng dụng desktop được cài trong cùng khoảng thời gian.
+fn mark_companions(apps: &mut [AppInfo]) {
+    let candidates: Vec<(usize, u64, String)> = apps
+        .iter()
+        .enumerate()
+        .filter(|(_, app)| app.kind == AppKind::Desktop && !runtime(app))
+        .filter_map(|(index, app)| Some((index, app.installed_at?, app.install_date.clone()?)))
+        .collect();
+    let mut found: Vec<(usize, Vec<String>)> = Vec::new();
+    for (index, time, date) in &candidates {
+        let names: Vec<String> = candidates
+            .iter()
+            .filter(|(other, other_time, other_date)| {
+                other != index
+                    && other_date == date
+                    && other_time.abs_diff(*time) <= COMPANION_WINDOW
+            })
+            .map(|(other, _, _)| apps[*other].name.clone())
+            .collect();
+        if !names.is_empty() && names.len() < COMPANION_LIMIT {
+            found.push((*index, names));
+        }
+    }
+    for (index, names) in found {
+        apps[index].companions = names;
+    }
 }
 
 pub fn list() -> Result<Vec<AppInfo>, String> {
@@ -214,6 +271,8 @@ pub fn list() -> Result<Vec<AppInfo>, String> {
             size: None,
             install_location: package.install_location.clone(),
             needs_admin: false,
+            installed_at: None,
+            companions: Vec::new(),
             machine: false,
             key: String::new(),
             uninstall: String::new(),
@@ -255,7 +314,7 @@ fn rot13(value: &str) -> String {
 
 /// Lexical Windows paths, independent of the test host. Never resolve shell IDs,
 /// environment variables, relative paths, UNC/device paths, shortcuts or commands.
-fn usage_path(raw: &str) -> Option<String> {
+pub(super) fn usage_path(raw: &str) -> Option<String> {
     if raw.len() > USAGE_PATH_LIMIT {
         return None;
     }
@@ -612,6 +671,24 @@ fn associate_installed_together(apps: &mut [AppInfo]) {
     }
 }
 
+fn append_usage_paths(evidence: &mut Vec<AppRunEvidence>, entries: &[app_usage::Entry], now: u64) {
+    evidence.extend(entries.iter().filter_map(|entry| {
+        let app_usage::Target::Path(path) = &entry.target else {
+            return None;
+        };
+        let raw = path.to_str()?;
+        let executable = usage_path(raw)?;
+        (entry.last_used > 0
+            && entry.last_used <= now
+            && executable.ends_with(".exe")
+            && !raw.ends_with(['\\', '/']))
+        .then_some(AppRunEvidence {
+            executable,
+            unix_seconds: entry.last_used,
+        })
+    }));
+}
+
 fn populate_inventory_signals(apps: &mut [AppInfo]) {
     // Known-folder guards also cover relocated Windows/profile/common directories.
     let boundaries: Vec<_> = [
@@ -637,11 +714,15 @@ fn populate_inventory_signals(apps: &mut [AppInfo]) {
             .map(|path| (path, subtree))
     })
     .collect();
-    let evidence = std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|now| collect_userassist(now.as_secs()))
+        .map(|now| now.as_secs())
         .unwrap_or_default();
+    let mut evidence = collect_userassist(now);
+    let entries = app_usage::entries();
+    append_usage_paths(&mut evidence, &entries, now);
     associate_last_used(apps, &evidence, &boundaries);
+    app_usage::assign_store(apps, &entries);
     associate_installed_together(apps);
 }
 
@@ -900,6 +981,8 @@ pub fn force_target(name: &str, path: &str, installed: &[AppInfo]) -> Result<App
         size: None,
         install_location: Some(location),
         needs_admin: false,
+        installed_at: None,
+        companions: Vec::new(),
         machine: false,
         key: String::new(),
         uninstall: String::new(),
@@ -2066,6 +2149,56 @@ mod tests {
     }
 
     #[test]
+    fn resolved_usage_is_validated_and_keeps_conservative_desktop_ownership() {
+        let mut evidence = vec![inventory_evidence("C:\\Apps\\Tool\\tool.exe", 100)];
+        let mut entries = vec![app_usage::Entry {
+            target: app_usage::Target::Path("c:/APPS/Tool/resolved.EXE".into()),
+            last_used: 300,
+        }];
+        for path in [
+            "C:\\Apps\\Tool\\tool.lnk",
+            "C:\\Apps\\Tool\\tool.exe\\",
+            "C:\\Apps\\Tool\\..\\other.exe",
+            "C:\\Apps\\Tool\\NUL.exe",
+            "C:\\Apps\\Tool\\tool.exe --start",
+            "C:\\Apps\\Tool\\tool.exe:other.exe",
+            "\\\\server\\share\\tool.exe",
+            "\\\\?\\C:\\Apps\\Tool\\tool.exe",
+            "{UNKNOWN}\\tool.exe",
+            "%ProgramFiles%\\Tool\\tool.exe",
+        ] {
+            entries.push(app_usage::Entry {
+                target: app_usage::Target::Path(path.into()),
+                last_used: 500,
+            });
+        }
+        for last_used in [0, 601] {
+            entries.push(app_usage::Entry {
+                target: app_usage::Target::Path("C:\\Apps\\Tool\\tool.exe".into()),
+                last_used,
+            });
+        }
+        entries.push(app_usage::Entry {
+            target: app_usage::Target::App("Tool_pub!App".into()),
+            last_used: 500,
+        });
+        append_usage_paths(&mut evidence, &entries, 600);
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[1].executable, "c:\\apps\\tool\\resolved.exe");
+        let base = app("tool", "Tool", "Example Corp", "C:\\Apps\\Tool");
+        let mut apps = vec![base.clone()];
+        associate_last_used(&mut apps, &evidence, &[]);
+        app_usage::assign_store(&mut apps, &entries);
+        assert_eq!(apps[0].last_used, Some(300));
+        for root in ["C:\\Apps", "c:/apps/TOOL", "C:\\Apps\\Tool\\Child"] {
+            let mut apps = [base.clone(), app("other", "Child", "Other Corp", root)];
+            associate_last_used(&mut apps, &evidence, &[]);
+            app_usage::assign_store(&mut apps, &entries);
+            assert!(apps.iter().all(|app| app.last_used.is_none()), "{root}");
+        }
+    }
+
+    #[test]
     fn inventory_usage_rejects_overlapping_duplicate_and_unsupported_roots() {
         let base = app("tool", "Tool", "Example Corp", "C:\\Apps\\Tool");
         let evidence = [inventory_evidence("C:\\Apps\\Tool\\tool.exe", 100)];
@@ -2250,6 +2383,8 @@ mod tests {
             size: None,
             install_location: Some(location.into()),
             needs_admin: true,
+            installed_at: None,
+            companions: Vec::new(),
             machine: true,
             key: format!("SOFTWARE\\Test\\{id}"),
             uninstall: format!("\"{location}\\uninst.exe\""),
@@ -2257,6 +2392,60 @@ mod tests {
             package: None,
             synthetic: false,
         }
+    }
+
+    #[test]
+    fn companions_need_same_day_close_time_and_skip_runtimes_and_mass_installs() {
+        let at = |id: &str, name: &str, date: &str, time: u64| {
+            let mut a = app(id, name, "Vendor", r"C:\Fixture");
+            a.install_date = Some(date.into());
+            a.installed_at = Some(time);
+            a
+        };
+        let mut apps = vec![
+            at("main", "Free Player", "2026-11-18", 1_000),
+            at("bar", "Search Bar", "2026-11-18", 1_120),
+            at(
+                "vc",
+                "Microsoft Visual C++ 2015-2022 Redistributable",
+                "2026-11-18",
+                1_060,
+            ),
+            at(
+                "late",
+                "Later Tool",
+                "2026-11-18",
+                1_000 + COMPANION_WINDOW + 200,
+            ),
+            at("other", "Other Day", "2026-11-19", 1_010),
+        ];
+        let mut store = app("store", "Store App", "Vendor", r"C:\Store");
+        store.kind = AppKind::Store;
+        store.install_date = Some("2026-11-18".into());
+        store.installed_at = Some(1_000);
+        apps.push(store);
+        mark_companions(&mut apps);
+        assert_eq!(apps[0].companions, ["Search Bar"]);
+        assert_eq!(apps[1].companions, ["Free Player"]);
+        assert!(
+            apps[2].companions.is_empty()
+                && apps[3].companions.is_empty()
+                && apps[4].companions.is_empty()
+                && apps[5].companions.is_empty()
+        );
+
+        let mut mass: Vec<AppInfo> = (0..=COMPANION_LIMIT as u64)
+            .map(|i| {
+                at(
+                    &format!("m{i}"),
+                    &format!("Preload {i}"),
+                    "2026-11-18",
+                    5_000 + i,
+                )
+            })
+            .collect();
+        mark_companions(&mut mass);
+        assert!(mass.iter().all(|a| a.companions.is_empty()));
     }
 
     #[test]

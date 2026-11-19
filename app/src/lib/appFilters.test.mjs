@@ -6,7 +6,7 @@ const now = new Date(2026, 10, 17, 23, 30).getTime() / 1000;
 const app = (extra = {}) => ({
   id: 'app', name: 'Example', kind: 'desktop', builtIn: false, removable: true,
   publisher: 'Example Vendor', version: '1', installDate: null, size: null,
-  lastUsed: null, installedTogether: [], installLocation: null, needsAdmin: false, ...extra,
+  lastUsed: null, installedTogether: [], companions: [], installedAt: null, installLocation: null, needsAdmin: false, ...extra,
 });
 const dateAgo = (days) => {
   const date = new Date(now * 1000); date.setDate(date.getDate() - days);
@@ -22,6 +22,16 @@ test('unknown usage never means unused; Unix seconds and 90-day boundary', () =>
   assert.ok(!appSignals(app({ lastUsed: now - 90 * 86400 + 1 }), now).includes('unused'));
   assert.ok(!appSignals(app({ lastUsed: now + 1 }), now).includes('unused'));
   assert.equal(knownUsage(0), true);
+});
+
+test('companion hints remain distinct from same-day peers and combine with other filters', () => {
+  const bundled = app({ id: 'bundled', companions: ['Other app'], size: 1024 ** 3 });
+  const peer = app({ id: 'peer', installedTogether: ['other'], size: 1024 ** 3 });
+  assert.ok(appSignals(bundled, now).includes('companions'));
+  assert.ok(!appSignals(bundled, now).includes('peers'));
+  assert.ok(!appSignals(peer, now).includes('companions'));
+  assert.deepEqual(filterApps([bundled, peer], '', 'desktop', { companions: true, large: true }, 'name', now).map(a => a.id), ['bundled']);
+  assert.equal(Object.hasOwn(bundled, 'selected'), false);
 });
 
 test('large is inclusive at 500 MiB, not 500 MB', () => {

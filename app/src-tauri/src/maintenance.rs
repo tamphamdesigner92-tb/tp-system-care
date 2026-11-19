@@ -335,7 +335,7 @@ pub fn app_cache_reveal(tools: State<'_, MaintenanceState>, id: String) -> Resul
 }
 
 #[tauri::command]
-pub async fn extensions_list(
+pub async fn review_extensions_list(
     state: State<'_, AppState>,
 ) -> Result<software_review::ExtensionScan, String> {
     let guard = BusyGuard::acquire(&state.busy)?;

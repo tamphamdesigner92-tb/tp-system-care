@@ -2,7 +2,7 @@ import type { AppInfo } from './tools';
 
 export type AppSort = 'name' | 'size' | 'date' | 'lastUsed';
 export type AppFilter = 'all' | 'desktop' | 'store' | 'builtIn';
-export const APP_SIGNALS = ['large', 'recent', 'unused', 'unknown', 'peers'] as const;
+export const APP_SIGNALS = ['large', 'recent', 'unused', 'unknown', 'peers', 'companions'] as const;
 export type AppSignal = typeof APP_SIGNALS[number];
 
 export function knownUsage(value: number | null): value is number {
@@ -29,6 +29,7 @@ export function appSignals(app: AppInfo, nowSeconds: number): AppSignal[] {
       case 'unused': return known && nowSeconds - app.lastUsed! >= 90 * 86400;
       case 'unknown': return !known;
       case 'peers': return app.installedTogether.some((id) => id !== app.id);
+      case 'companions': return app.companions.length > 0;
     }
   });
 }

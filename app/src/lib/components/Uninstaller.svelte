@@ -8,6 +8,7 @@
   import { inTauri } from '../tauri';
   import {
     appsList,
+    whenIdle,
     appsUninstall,
     forceTarget,
     uninstallPrepare,
@@ -97,7 +98,7 @@
     loading = true;
     loadError = '';
     try {
-      const list = await appsList();
+      const list = await whenIdle(appsList, () => !destroyed && version === loadVersion);
       if (destroyed || version !== loadVersion) return;
       apps = list;
       observedAt = Math.floor(Date.now() / 1000);
@@ -457,6 +458,7 @@
                       <button class="app-identity" aria-label={t('uninstall.showDetails', { name: a.name })} aria-expanded={expanded === a.id} disabled={busy} onclick={() => (expanded = expanded === a.id ? null : a.id)}>
                         <span class="app-tile" style={`--tile-hue:${tileHue(a.name)}`} aria-hidden="true">{initials(a.name)}</span>
                         <span class="app-copy"><span class="app-title" title={a.name}>{a.name}</span><span class="app-publisher" title={a.publisher ?? ''}>{a.publisher ?? t(`uninstall.type.${a.kind}`)}</span></span>
+                        {#if a.companions.length}<span class="badge protected" title={t('uninstall.companionsHint', { names: a.companions.join(', ') })}>{t('uninstall.companions')}</span>{/if}
                         {#if !a.removable}<span class="protected-icon" title={t('uninstall.protectedHint')} aria-label={t('uninstall.protected')}><Icon name="protect" size={14} /></span>{/if}
                         <span class="row-chevron" class:rotated={expanded === a.id}><Icon name="chevronDown" size={13} /></span>
                       </button>
@@ -472,6 +474,7 @@
                         <p>{t('uninstall.lastObserved', { time: knownUsage(a.lastUsed) ? formatTime(a.lastUsed) : t('maintenance.unknown') })}</p>
                         {#if a.installLocation}<div class="detail-location"><span>{a.installLocation}</span><button class="link" disabled={busy} onclick={() => showLocation(a.installLocation!)}><Icon name="back" size={13} />{t('tool.reveal')}</button></div>{/if}
                         {#if a.installedTogether.some((id) => id !== a.id)}<p>{t('uninstall.peerNames', { names: a.installedTogether.filter((id) => id !== a.id).map((id) => appNames.get(id) ?? id).join(', ') })}</p>{/if}
+                        {#if a.companions.length}<p>{t('uninstall.companionsHint', { names: a.companions.join(', ') })}</p>{/if}
                         <div class="badges">{#each appSignals(a, observedAt) as signal (signal)}<span class="badge">{t(`uninstall.signal.${signal}`)}</span>{/each}</div>
                         <p class="details-note">{t('uninstall.signalNote')}</p>
                       </div>
@@ -519,6 +522,7 @@
         </div>
       {:else if step === 'confirm'}
         <p class="desc">{t(mode === 'forced' ? 'uninstall.forceConfirm' : 'uninstall.confirm')}</p>
+        {#if app?.companions.length}<p class="note">{t('uninstall.companionsHint', { names: app.companions.join(', ') })}</p>{/if}
         {#if targets.length > 1}
           <ul class="list queue">{#each targets as a (a.id)}<li><span class="name">{a.name}</span></li>{/each}</ul>
           <p class="note">{t('uninstall.batchHint')}</p>
